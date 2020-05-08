@@ -391,7 +391,6 @@ public class Game
                 var nY = cur.Item2 + dir2[d];
                 if (nY < 0 || nY >= Height) continue;
                 if (_map[nY, nX].IsWall) continue;
-                if (_map[nY, nX].IsUnknown) continue;   // conservative
                 if (_map[nY, nX].IsPac) continue;       // avoid collision
                 if (passed.Contains((nX, nY))) continue;
                 que.Enqueue((nX, nY, cur.Item3 + 1));
