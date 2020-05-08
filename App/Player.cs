@@ -97,6 +97,12 @@ public static class Util
             Console.Error.WriteLine();
         }
     }
+
+    public static int NegToINF(int val)
+    {
+        if (val < 0) return int.MaxValue;
+        return val;
+    }
 }
 
 public class CellItem
@@ -233,28 +239,77 @@ public class Game
     {
         CreateMap();
 
-        // only one pac
-        // MOVE 0 X Y
-        // just goto the closest pellet
-        var pac = _pacs.First(p => p.Mine);
-        var closest = FindClosest(pac, "PELLET");
-        return "MOVE 0 " + closest.x + " " + closest.y;
+        var ret = new StringBuilder();
+        var avoid = new HashSet<(int, int)>();  // avoid moving to the same spot
+
+        var myPacs = _pacs.Where(p => p.Mine);
+
+        // consider pacs close to large pellet and cluster pellet first
+        myPacs = myPacs.OrderBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true).distance)).
+            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true).distance));
+
+        foreach(var pac in myPacs)
+        {
+            (int x, int y, int distance) tgt = (-1, -1, -1);
+
+            foreach (var useAvoid in new bool[] { true, false })
+            {
+                var largePellet = FindClosest(pac, "PELLET_LARGE", avoid, useAvoid);
+                var clusterPellet = FindClosest(pac, "PELLET_CLUSTER", avoid, useAvoid);
+                var smallPellet = FindClosest(pac, "PELLET_1", avoid, useAvoid);
+
+                // prefers large pellet
+                if (largePellet.x != -1 && smallPellet.x != -1 && largePellet.distance - smallPellet.distance <= 10)
+                    tgt = largePellet;
+                else if (clusterPellet.x != -1 && smallPellet.x != -1 && clusterPellet.distance - smallPellet.distance <= 5)
+                    tgt = clusterPellet;
+                else
+                    tgt = smallPellet;
+
+                // NOTE: not used in wood league
+                // no good target position found => goto position next to unkwon
+                if(tgt.x == -1)
+                    tgt = FindClosest(pac, "NEXT_TO_UNKNOWN", avoid, useAvoid);
+
+                // still no good target position found => goto the closest crossing
+                if (tgt.x == -1)
+                    tgt = FindClosest(pac, "CROSSING", avoid, useAvoid);
+
+                // still no good target position found => goto the closest curve
+                if (tgt.x == -1)
+                    tgt = FindClosest(pac, "CURVE", avoid, useAvoid);
+
+                // still no? => just move to next cell
+                if (tgt.x == -1)
+                    tgt = FindClosest(pac, "FLOOR", avoid, useAvoid);
+
+                if (tgt.x != -1) break;
+            }
+
+            if (tgt.x == -1) continue;  // should not happen
+            if (ret.Length > 0) ret.Append(" | ");
+            avoid.Add((tgt.x, tgt.y));
+            ret.Append("MOVE " + pac.ID + " " + tgt.x + " " + tgt.y);
+        }
+
+        return ret.ToString();
     }
 
     int[] dir1 = new int[] { 1, -1, 0, 0 };
     int[] dir2 = new int[] { 0, 0, 1, -1 };
 
-    (int x, int y) FindClosest(CellItem item, string tgtType)
+    (int x, int y, int distance) FindClosest(CellItem item, string tgtType, HashSet<(int, int)> avoid, bool useAvoid)
     {
         var passed = new HashSet<(int, int)>();
-        var que = new Queue<(int, int)>();
-        que.Enqueue((item.X, item.Y));
+        var que = new Queue<(int, int, int)>();
+        que.Enqueue((item.X, item.Y, 0));
         passed.Add((item.X, item.Y));
 
         while (que.Any())
         {
             var cur = que.Dequeue();
-            if (IsTarget(_map[cur.Item2, cur.Item1], tgtType)) return cur;
+            if (IsTarget(_map[cur.Item2, cur.Item1], tgtType) && (!useAvoid || !avoid.Contains((cur.Item1, cur.Item2))))
+                return cur;
 
             for (int d = 0; d < 4; d++)
             {
@@ -263,19 +318,45 @@ public class Game
                 if (nY < 0 || nY >= Height) continue;
                 if (_map[nY, nX].IsWall) continue;
                 if (_map[nY, nX].IsUnknown) continue;   // conservative
+                if (_map[nY, nX].IsPac) continue;       // avoid collision
                 if (passed.Contains((nX, nY))) continue;
-                que.Enqueue((nX, nY));
+                que.Enqueue((nX, nY, cur.Item3 + 1));
                 passed.Add((nX, nY));
             }
         }
 
-        return (-1, -1);
+        return (-1, -1, -1);
     }
 
     bool IsTarget(CellItem item, string tgtType)
     {
+        if (tgtType == "PELLET_1")
+            return item.IsPellet && (item as Pellet).Value == 1;
+        if (tgtType == "PELLET_LARGE")
+            return item.IsPellet && (item as Pellet).Value > 1;
         if (tgtType == "PELLET")
             return item.IsPellet;
+        if (tgtType == "FLOOR")
+            return item.IsFloor;
+
+        if (tgtType == "PELLET_CLUSTER")
+        {
+
+        }
+
+        if (tgtType == "NEXT_TO_UNKNOWN")
+        {
+
+        }
+        if (tgtType == "CROSSING")
+        {
+
+        }
+        if (tgtType == "CURVE")
+        {
+
+        }
+
         return false;
     }
 }
