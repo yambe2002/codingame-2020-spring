@@ -190,7 +190,7 @@ public class Game
 
     public void TurnStart()
     {
-        _prevPacs = _pacs;
+        _prevPacs = _pacs.ToList();
         _pacs.Clear();
         _pellets.Clear();
     }
@@ -247,7 +247,7 @@ public class Game
                 else if (prevMap[i, j].IsUnknown) ret[i, j] = prevMap[i, j];
                 // pac becomes floor
                 else if (prevMap[i, j].IsPac) ret[i, j] = new Floor(j, i);
-                // pellet remains as pellet, but decrease certainity
+                // pellet remains as pellet, but increase uncertainity
                 else if (prevMap[i, j].IsPellet)
                 {
                     var pellet = prevMap[i, j] as Pellet;
@@ -270,9 +270,19 @@ public class Game
         foreach (var pac in pacs)
             ret[pac.Y, pac.X] = pac;
         foreach (var pellet in pellets)
+        {
+            if (ret[pellet.Y, pellet.X].IsPellet) continue; // no need overwrite (avoid clearing uncertainity)
             ret[pellet.Y, pellet.X] = pellet;
+        }
 
         return ret;
+    }
+
+    (int, int) GetPrevPos(Pac pac)
+    {
+        var tgt = _prevPacs.FirstOrDefault(p => p.Mine == pac.Mine && p.ID == pac.ID);
+        if (tgt == null) return (-1, -1);
+        return (tgt.X, tgt.Y);
     }
 
     public string GetMove()
@@ -294,15 +304,26 @@ public class Game
 
         foreach (var pac in myPacs)
         {
+            Util.Log("ID: " + pac.ID + " - " + pac.X + "," + pac.Y);
+
+            // avoid to go back
+            var prevPos = GetPrevPos(pac);
+            var prevPosAdded = !avoid.Contains(prevPos);
+            avoid.Add(prevPos);
+
             (int x, int y, int distance) tgt = (-1, -1, -1);
 
             foreach (var useAvoid in new bool[] { true, false })
             {
                 foreach (var certainPellet in new bool[] { true, false })
                 {
+                    var smallPellet = FindClosest(pac, "PELLET_1", avoid, useAvoid, certainPellet);
                     var largePellet = FindClosest(pac, "PELLET_LARGE", avoid, useAvoid, certainPellet);
                     var clusterPellet = FindClosest(pac, "PELLET_CLUSTER", avoid, useAvoid, certainPellet);
-                    var smallPellet = FindClosest(pac, "PELLET_1", avoid, useAvoid, certainPellet);
+
+                    Util.Log("large pellet: " + largePellet.x + "," + largePellet.y + "," + largePellet.distance);
+                    Util.Log("cluster pellet: " + clusterPellet.x + "," + clusterPellet.y + "," + clusterPellet.distance);
+                    Util.Log("small pellet: " + smallPellet.x + "," + smallPellet.y + "," + smallPellet.distance);
 
                     // prefers large pellet
                     if (largePellet.x != -1 && smallPellet.x != -1 && largePellet.distance - smallPellet.distance <= 10)
@@ -315,18 +336,17 @@ public class Game
                     if (tgt.x != -1) break;
                 }
 
-                // NOTE: not used in wood league
                 // no good target position found => goto position next to unkwon
                 if (tgt.x == -1)
                     tgt = FindClosest(pac, "NEXT_TO_UNKNOWN", avoid, useAvoid, false);
 
-                // still no good target position found => goto the closest crossing
-                if (tgt.x == -1)
-                    tgt = FindClosest(pac, "CROSSING", avoid, useAvoid, false);
+                //// still no good target position found => goto the closest crossing
+                //if (tgt.x == -1)
+                //    tgt = FindClosest(pac, "CROSSING", avoid, useAvoid, false);
 
-                // still no good target position found => goto the closest curve
-                if (tgt.x == -1)
-                    tgt = FindClosest(pac, "CURVE", avoid, useAvoid, false);
+                //// still no good target position found => goto the closest curve
+                //if (tgt.x == -1)
+                //    tgt = FindClosest(pac, "CURVE", avoid, useAvoid, false);
 
                 // still no? => just move to next cell
                 if (tgt.x == -1)
@@ -336,6 +356,7 @@ public class Game
             }
 
             if (tgt.x == -1) Util.Log("could not find any move");
+            if (prevPosAdded) avoid.Remove(prevPos);
 
             if (tgt.x == -1) continue;  // should not happen
             if (ret.Length > 0) ret.Append(" | ");
@@ -378,10 +399,11 @@ public class Game
         while (que.Any())
         {
             var cur = que.Dequeue();
+            if (useAvoid && avoid.Contains((cur.Item1, cur.Item2))) continue;
 
-            if (cur.Item1 != item.X && cur.Item2 != item.Y)
+            if (cur.Item1 != item.X || cur.Item2 != item.Y)
             {
-                if (IsTarget(_map[cur.Item2, cur.Item1], tgtType, certainPellet) && (!useAvoid || !avoid.Contains((cur.Item1, cur.Item2))))
+                if (IsTarget(_map[cur.Item2, cur.Item1], tgtType, certainPellet))
                     return cur;
             }
 
@@ -441,34 +463,16 @@ public class Game
     // more than count targets within maxDist from the cell
     bool IsCluster(CellItem item, string tgtType, bool certainPellet, int maxDist=3, int count=4)
     {
-        var cnt = 0;
-
-        var passed = new HashSet<(int, int)>();
-        var que = new Queue<(int, int, int)>();
-        que.Enqueue((item.X, item.Y, 0));
-        passed.Add((item.X, item.Y));
-
-        while (que.Any())
+        if (!IsTarget(item, "PELLET", certainPellet)) return false;
+        var cnt = (_map[item.Y, item.X] as Pellet).Value;
+        var adjs = GetAdjuscents(item);
+        foreach (var n in adjs)
         {
-            var cur = que.Dequeue();
-            if (IsTarget(_map[cur.Item2, cur.Item1], tgtType, certainPellet))
-                cnt++;
-            if (cnt == count) return true;
-            if (cur.Item3 == maxDist) continue;
-
-            for (int d = 0; d < 4; d++)
-            {
-                var nX = (cur.Item1 + dir1[d] + Width) % Width; // side can go through
-                var nY = cur.Item2 + dir2[d];
-                if (nY < 0 || nY >= Height) continue;
-                if (_map[nY, nX].IsWall) continue;
-                if (passed.Contains((nX, nY))) continue;
-                que.Enqueue((nX, nY, cur.Item3 + 1));
-                passed.Add((nX, nY));
-            }
+            var wk = _map[n.Item2, n.Item1];
+            if (!wk.IsPellet) continue;
+            cnt += (wk as Pellet).Value;
         }
-
-        return false;
+        return cnt >= 3;
     }
 
     bool IsNextTo(CellItem item, string tgtType, bool certainPellet)
