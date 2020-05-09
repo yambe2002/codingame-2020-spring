@@ -115,7 +115,6 @@ public class CellItem
     public bool IsPellet => this is Pellet;
     public bool IsWall => this is Wall;
     public bool IsFloor => this is Floor;
-    public bool IsUnknown => this is Unknown;
 
     public CellItem(int x, int y)
     {
@@ -137,14 +136,6 @@ public class Floor : CellItem
     public override string ToString()
     {
         return " ";
-    }
-}
-public class Unknown : CellItem
-{
-    public Unknown(int x, int y) : base(x, y) { }
-    public override string ToString()
-    {
-        return "?";
     }
 }
 public class Pac : CellItem
@@ -225,7 +216,7 @@ public class Game
             for (int j = 0; j < width; j++)
             {
                 if (grid[i][j] == '#') ret[i, j] = new Wall(j, i);
-                else ret[i, j] = new Unknown(j, i);
+                else ret[i, j] = new Pellet(j, i);
             }
         }
         return ret;
@@ -243,8 +234,6 @@ public class Game
                 if (prevMap[i, j].IsWall) ret[i, j] = prevMap[i, j];
                 // floor remains as floor
                 else if (prevMap[i, j].IsFloor) ret[i, j] = prevMap[i, j];
-                // unknown remains as unknown
-                else if (prevMap[i, j].IsUnknown) ret[i, j] = prevMap[i, j];
                 // pac becomes floor
                 else if (prevMap[i, j].IsPac) ret[i, j] = new Floor(j, i);
                 // pellet remains as pellet, but increase uncertainity
@@ -270,10 +259,7 @@ public class Game
         foreach (var pac in pacs)
             ret[pac.Y, pac.X] = pac;
         foreach (var pellet in pellets)
-        {
-            if (ret[pellet.Y, pellet.X].IsPellet) continue; // no need overwrite (avoid clearing uncertainity)
             ret[pellet.Y, pellet.X] = pellet;
-        }
 
         return ret;
     }
@@ -295,16 +281,20 @@ public class Game
         var myPacs = _pacs.Where(p => p.Mine);
         var enemyPacs = _pacs.Where(p => !p.Mine);
         // avoid moving to enemy
-        foreach (var e in enemyPacs) avoid.Add((e.X, e.Y));
+        foreach (var e in enemyPacs)
+        {
+            foreach(var n in GetAdjuscents(e)) avoid.Add(n);
+        }
 
         // consider pacs close to large pellet and cluster pellet first
-        myPacs = myPacs.OrderBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, true).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true, true).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "NEXT_TO_UNKNOWN", avoid, true, true).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, false).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true, false).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "NEXT_TO_UNKNOWN", avoid, true, false).distance));
+        myPacs = myPacs.OrderBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, true, (-1, -1), true).distance)).
+            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE_CLUSTER", avoid, true, true, (-1, -1), true).distance)).
+            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true, true, (-1, -1), true).distance)).
+            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, false, (-1, -1), true).distance)).
+            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE_CLUSTER", avoid, true, false, (-1, -1), true).distance)).
+            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true, false, (-1, -1), true).distance));
 
+        // MOVE
         foreach (var pac in myPacs)
         {
             Util.Log("ID: " + pac.ID + " - " + pac.X + "," + pac.Y);
@@ -320,14 +310,18 @@ public class Game
                 {
                     var smallPellet = FindClosest(pac, "PELLET_1", avoid, useAvoid, certainPellet, prevPos, false);
                     var largePellet = FindClosest(pac, "PELLET_LARGE", avoid, useAvoid, certainPellet, prevPos, false);
+                    var largeclusterPellet = FindClosest(pac, "PELLET_LARGE_CLUSTER", avoid, useAvoid, certainPellet, prevPos, false);
                     var clusterPellet = FindClosest(pac, "PELLET_CLUSTER", avoid, useAvoid, certainPellet, prevPos, false);
 
                     Util.Log("large pellet: " + largePellet.x + "," + largePellet.y + "," + largePellet.distance);
+                    Util.Log("large cluster pellet: " + largeclusterPellet.x + "," + largeclusterPellet.y + "," + largeclusterPellet.distance);
                     Util.Log("cluster pellet: " + clusterPellet.x + "," + clusterPellet.y + "," + clusterPellet.distance);
                     Util.Log("small pellet: " + smallPellet.x + "," + smallPellet.y + "," + smallPellet.distance);
 
                     // prefers large pellet
                     if (largePellet.x != -1 && smallPellet.x != -1 && largePellet.distance - smallPellet.distance <= 10)
+                        tgt = largePellet;
+                    if (largeclusterPellet.x != -1 && smallPellet.x != -1 && largeclusterPellet.distance - smallPellet.distance <= 10)
                         tgt = largePellet;
                     else if (clusterPellet.x != -1 && smallPellet.x != -1 && clusterPellet.distance - smallPellet.distance <= 5)
                         tgt = clusterPellet;
@@ -336,16 +330,7 @@ public class Game
 
                     if (tgt.x != -1) break;
                 }
-
-
-
-                // no good target position found => goto position next to unkwon
-                if (tgt.x == -1)
-                {
-                    tgt = FindClosest(pac, "NEXT_TO_UNKNOWN", avoid, useAvoid, false, prevPos, false);
-                    Util.Log("next to unknown: " + tgt.x + "," + tgt.y + "," + tgt.distance);
-                }
-
+                
                 // still no good target position found => goto the closest crossing
                 if (tgt.x == -1)
                 {
@@ -381,7 +366,7 @@ public class Game
 
             if (tgt.x == -1) continue;  // should not happen
             if (ret.Length > 0) ret.Append(" | ");
-            avoid.Add((tgt.x, tgt.y));
+            AddToAvoid((tgt.x, tgt.y), avoid);
 
             // avoid collision
             var adjs = GetAdjuscents(pac);
@@ -391,6 +376,40 @@ public class Game
         }
 
         return ret.ToString();
+    }
+
+    void AddToAvoid((int x, int y) st, HashSet<(int, int)> avoid)
+    {
+        avoid.Add((st));
+        if (!_map[st.y, st.x].IsPellet) return;
+
+        // avoid so that multiple pacs go to the same pellet island, within dist=3
+        var que = new Queue<(int, int)>();
+        var passed = new HashSet<(int, int)>();
+        que.Enqueue(st);
+        passed.Add(st);
+        var cnt = 0;
+        while(que.Any())
+        {
+            var newQue = new Queue<(int, int)>();
+            while (que.Any())
+            {
+                var item = que.Dequeue();
+                avoid.Add(item);
+                for (int d = 0; d < 4; d++)
+                {
+                    var nX = (item.Item1 + dir1[d] + Width) % Width; // side can go through
+                    var nY = item.Item2 + dir2[d];
+                    if (nY < 0 || nY >= Height) continue;
+                    if (!_map[nY, nX].IsPellet) continue;
+                    if (passed.Contains((nX, nY))) continue;
+                    newQue.Enqueue((nX, nY));
+                }
+            }
+            cnt++;
+            if (cnt == 3) break;
+            que = newQue;
+        }
     }
 
     List<(int, int)> GetAdjuscents(CellItem item)
@@ -450,8 +469,6 @@ public class Game
     {
         if (tgtType == "WALL")
             return item.IsWall;
-        if (tgtType == "UNKNOWN")
-            return item.IsUnknown;
         if (tgtType == "PELLET")
             return item.IsPellet && (!certainPellet || (item as Pellet).UncertaintyLevel < 10);
         if (tgtType == "FLOOR")
@@ -470,9 +487,8 @@ public class Game
 
         if (tgtType == "PELLET_CLUSTER")
             return IsCluster(item, "PELLET", certainPellet);
-
-        if (tgtType == "NEXT_TO_UNKNOWN")
-            return IsNextTo(item, "UNKNOWN", false);
+        if (tgtType == "PELLET_LARGE_CLUSTER")
+            return IsCluster(item, "PELLET", certainPellet, 5, 6);
 
         if (tgtType == "CROSSING")
             return IsCrossing(item);
