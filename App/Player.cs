@@ -293,6 +293,9 @@ public class Game
         var avoid = new HashSet<(int, int)>();  // avoid moving to the same spot
 
         var myPacs = _pacs.Where(p => p.Mine);
+        var enemyPacs = _pacs.Where(p => !p.Mine);
+        // avoid moving to enemy
+        foreach (var e in enemyPacs) avoid.Add((e.X, e.Y));
 
         // consider pacs close to large pellet and cluster pellet first
         myPacs = myPacs.OrderBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, true).distance)).
@@ -308,8 +311,6 @@ public class Game
 
             // avoid to go back
             var prevPos = GetPrevPos(pac);
-            var prevPosAdded = !avoid.Contains(prevPos);
-            avoid.Add(prevPos);
 
             (int x, int y, int distance) tgt = (-1, -1, -1);
 
@@ -317,9 +318,9 @@ public class Game
             {
                 foreach (var certainPellet in new bool[] { true, false })
                 {
-                    var smallPellet = FindClosest(pac, "PELLET_1", avoid, useAvoid, certainPellet);
-                    var largePellet = FindClosest(pac, "PELLET_LARGE", avoid, useAvoid, certainPellet);
-                    var clusterPellet = FindClosest(pac, "PELLET_CLUSTER", avoid, useAvoid, certainPellet);
+                    var smallPellet = FindClosest(pac, "PELLET_1", avoid, useAvoid, certainPellet, prevPos, false);
+                    var largePellet = FindClosest(pac, "PELLET_LARGE", avoid, useAvoid, certainPellet, prevPos, false);
+                    var clusterPellet = FindClosest(pac, "PELLET_CLUSTER", avoid, useAvoid, certainPellet, prevPos, false);
 
                     Util.Log("large pellet: " + largePellet.x + "," + largePellet.y + "," + largePellet.distance);
                     Util.Log("cluster pellet: " + clusterPellet.x + "," + clusterPellet.y + "," + clusterPellet.distance);
@@ -336,27 +337,47 @@ public class Game
                     if (tgt.x != -1) break;
                 }
 
+
+
                 // no good target position found => goto position next to unkwon
                 if (tgt.x == -1)
-                    tgt = FindClosest(pac, "NEXT_TO_UNKNOWN", avoid, useAvoid, false);
+                {
+                    tgt = FindClosest(pac, "NEXT_TO_UNKNOWN", avoid, useAvoid, false, prevPos, false);
+                    Util.Log("next to unknown: " + tgt.x + "," + tgt.y + "," + tgt.distance);
+                }
 
-                //// still no good target position found => goto the closest crossing
-                //if (tgt.x == -1)
-                //    tgt = FindClosest(pac, "CROSSING", avoid, useAvoid, false);
-
-                //// still no good target position found => goto the closest curve
-                //if (tgt.x == -1)
-                //    tgt = FindClosest(pac, "CURVE", avoid, useAvoid, false);
-
-                // still no? => just move to next cell
+                // still no good target position found => goto the closest crossing
                 if (tgt.x == -1)
-                    tgt = FindClosest(pac, "FLOOR", avoid, useAvoid, false);
+                {
+                    tgt = FindClosest(pac, "CROSSING", avoid, useAvoid, false, prevPos, false);
+                    Util.Log("crossing: " + tgt.x + "," + tgt.y + "," + tgt.distance);
+                }
+
+                // still no good target position found => goto the closest curve
+                if (tgt.x == -1)
+                {
+                    tgt = FindClosest(pac, "CURVE", avoid, useAvoid, false, prevPos, false);
+                    Util.Log("curve: " + tgt.x + "," + tgt.y + "," + tgt.distance);
+                }
+
+                // still no? => just move to next floor
+                if (tgt.x == -1)
+                {
+                    tgt = FindClosest(pac, "FLOOR", avoid, useAvoid, false, prevPos, false);
+                    Util.Log("next floor: " + tgt.x + "," + tgt.y + "," + tgt.distance);
+                }
+
+                // still no? => just move to next floor, even previous position
+                if (tgt.x == -1)
+                {
+                    tgt = FindClosest(pac, "FLOOR", avoid, useAvoid, false, prevPos, true);
+                    Util.Log("next floor (allow prev): " + tgt.x + "," + tgt.y + "," + tgt.distance);
+                }
 
                 if (tgt.x != -1) break;
             }
 
             if (tgt.x == -1) Util.Log("could not find any move");
-            if (prevPosAdded) avoid.Remove(prevPos);
 
             if (tgt.x == -1) continue;  // should not happen
             if (ret.Length > 0) ret.Append(" | ");
@@ -389,7 +410,8 @@ public class Game
     int[] dir1 = new int[] { 1, -1, 0, 0 };
     int[] dir2 = new int[] { 0, 0, 1, -1 };
 
-    (int x, int y, int distance) FindClosest(CellItem item, string tgtType, HashSet<(int, int)> avoid, bool useAvoid, bool certainPellet)
+    (int x, int y, int distance) FindClosest(CellItem item, string tgtType, HashSet<(int, int)> avoid, bool useAvoid, bool certainPellet,
+        (int, int) prevPos, bool allowPrevPos)
     {
         var passed = new HashSet<(int, int)>();
         var que = new Queue<(int, int, int)>();
@@ -400,6 +422,7 @@ public class Game
         {
             var cur = que.Dequeue();
             if (useAvoid && avoid.Contains((cur.Item1, cur.Item2))) continue;
+            if (!allowPrevPos && cur.Item1 == prevPos.Item1 && cur.Item2 == prevPos.Item2) continue;
 
             if (cur.Item1 != item.X || cur.Item2 != item.Y)
             {
