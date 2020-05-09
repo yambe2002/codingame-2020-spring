@@ -293,11 +293,20 @@ public class Game
             ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, false, (-1, -1), true).distance)).
             ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE_CLUSTER", avoid, true, false, (-1, -1), true).distance)).
             ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true, false, (-1, -1), true).distance));
+       
 
         // MOVE
         foreach (var pac in myPacs)
         {
             Util.Log("ID: " + pac.ID + " - " + pac.X + "," + pac.Y);
+
+            // speed up always if possible
+            if (pac.AbilityCoolDown == 0)
+            {
+                if (ret.Length > 0) ret.Append(" | ");
+                ret.Append("SPEED " + pac.ID);
+                continue;
+            }
 
             // avoid to go back
             var prevPos = GetPrevPos(pac);
@@ -321,8 +330,8 @@ public class Game
                     // prefers large pellet
                     if (largePellet.x != -1 && smallPellet.x != -1 && largePellet.distance - smallPellet.distance <= 10)
                         tgt = largePellet;
-                    if (largeclusterPellet.x != -1 && smallPellet.x != -1 && largeclusterPellet.distance - smallPellet.distance <= 10)
-                        tgt = largePellet;
+                    else if (largeclusterPellet.x != -1 && smallPellet.x != -1 && largeclusterPellet.distance - smallPellet.distance <= 10)
+                        tgt = largeclusterPellet;
                     else if (clusterPellet.x != -1 && smallPellet.x != -1 && clusterPellet.distance - smallPellet.distance <= 5)
                         tgt = clusterPellet;
                     else
@@ -365,13 +374,13 @@ public class Game
             if (tgt.x == -1) Util.Log("could not find any move");
 
             if (tgt.x == -1) continue;  // should not happen
-            if (ret.Length > 0) ret.Append(" | ");
             AddToAvoid((tgt.x, tgt.y), avoid);
 
             // avoid collision
             var adjs = GetAdjuscents(pac);
             foreach (var adj in adjs) avoid.Add(adj);
 
+            if (ret.Length > 0) ret.Append(" | ");
             ret.Append("MOVE " + pac.ID + " " + tgt.x + " " + tgt.y);
         }
 
@@ -441,7 +450,10 @@ public class Game
         {
             var cur = que.Dequeue();
             if (useAvoid && avoid.Contains((cur.Item1, cur.Item2))) continue;
-            if (!allowPrevPos && cur.Item1 == prevPos.Item1 && cur.Item2 == prevPos.Item2) continue;
+            if(cur.Item1 != item.X || cur.Item2 != item.Y)
+            {
+                if (!allowPrevPos && cur.Item1 == prevPos.Item1 && cur.Item2 == prevPos.Item2) continue;
+            }
 
             if (cur.Item1 != item.X || cur.Item2 != item.Y)
             {
