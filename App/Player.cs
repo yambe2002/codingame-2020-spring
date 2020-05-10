@@ -124,7 +124,7 @@ public static class Util
 
     public static void Log(Action action)
     {
-        Log("ID: " + action.Pac.ID + "  Target: " + action.TargetX + "," + action.TargetY + " Next: " + action.NextX + "," + action.NextY);
+        Log("ID: " + action.Pac.ID + "  Target: " + action.TargetX + "," + action.TargetY + " Next: " + action.NextX + "," + action.NextY + " ExpScore:" + action.ExpScore);
     }
 }
 
@@ -183,7 +183,7 @@ public class Pellet : CellItem
     public Pellet(int x, int y) : base(x, y) { }
     public override string ToString()
     {
-        return Value == 10 ? "T" : Value.ToString();
+        return Value == 10 ? "T" : UncertaintyLevel == 0 ? "I" : Value.ToString();
     }
 }
 
@@ -206,6 +206,7 @@ public class Action
     public int TargetY;
     public int Distance;
     public List<(int x, int y)> Path;
+    public double ExpScore;
 
     public override string ToString()
     {
@@ -258,7 +259,7 @@ public class Game
         if (_prevMap == null) _prevMap = InitMap(Grid, Height, Width);
 
         _map = UpdateMap(_prevMap, Height, Width, _pacs, _pellets, _prevPacs);
-        //Util.Log(_map);
+        Util.Log(_map);
         _prevMap = _map;
     }
 
@@ -270,7 +271,7 @@ public class Game
             for (int j = 0; j < width; j++)
             {
                 if (grid[i][j] == '#') ret[i, j] = new Wall(j, i);
-                else ret[i, j] = new Pellet(j, i);
+                else ret[i, j] = new Pellet(j, i) { Value = 1 };
             }
         }
         return ret;
@@ -386,17 +387,18 @@ public class Game
     public string GetMove()
     {
         CreateMap();
-
+        
         var actions = new List<Action>();
+        var zeroScores = new HashSet<(int, int)>();
 
         // better make speed up?
-        AddActions_SpeedUp(actions);
+        AddActions_SpeedUp(actions, zeroScores);
 
         // trys to get super pellets if possible
-        AddActions_SuperPellet(actions);
+        AddActions_SuperPellet(actions, zeroScores);
 
-        // TODO: implement
-
+        // find path for the best score in several steps
+        AddActions_BestScoreExp(actions, zeroScores);
 
         Util.Log(actions);
         return GetAns(actions);
@@ -413,7 +415,7 @@ public class Game
         return ret.ToString();
     }
 
-    void AddActions_SpeedUp(List<Action> actions)
+    void AddActions_SpeedUp(List<Action> actions, HashSet<(int, int)> zeroScores)
     {
         var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
         var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).Where(p => p.AbilityCoolDown == 0);
@@ -436,7 +438,7 @@ public class Game
         }
     }
 
-    void AddActions_SuperPellet(List<Action> actions)
+    void AddActions_SuperPellet(List<Action> actions, HashSet<(int, int)> zeroScores)
     {
         var superPellets = _pellets.Where(p => p.Value > 1);
         // no super pellets
@@ -488,8 +490,110 @@ public class Game
             {
                 var action = new Action { Pac = tpl.pac, IsMove = true, NextX = tpl.nextX, NextY = tpl.nextY, TargetX = pellet.X, TargetY = pellet.Y, Distance = tpl.distance, Path = tpl.willingPath};
                 actions.Add(action);
+                AddToZeroScores(action, zeroScores);
             }
         }
+    }
+
+    void AddActions_BestScoreExp(List<Action> actions, HashSet<(int, int)> zeroScores)
+    {
+        var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
+        var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).ToList();
+
+        foreach (var mypac in myPacs)
+        {
+            var act = GetBestScoreAction(mypac, zeroScores);
+            if (act == null) continue;
+            actions.Add(act);
+            AddToZeroScores(act, zeroScores);
+        }
+    }
+
+    Action GetBestScoreAction(Pac pac, HashSet<(int, int)> zeroScores)
+    {
+        int max_path_size = 15;
+
+        var prevPos = GetPrevPos(pac, _prevPacs);
+        var que = new Queue<(double score, int x, int y)>();
+
+        var passed = new HashSet<(int x, int y)>();
+        var prev = new Dictionary<(int, int), (int, int)>();
+
+        passed.Add((pac.X, pac.Y));
+        que.Enqueue((0, pac.X, pac.Y));
+
+        var dist = 0;
+        var score = -1.0;
+        (int X, int Y) tgt = (-1, -1);
+        while (que.Count() != 0)
+        {
+            dist++;
+            if (dist >= max_path_size) break;
+
+            var newQueue = new Queue<(double score, int x, int y)>();
+            while (que.Count() != 0)
+            {
+                var cur = que.Dequeue();
+                for (int d = 0; d < 4; d++)
+                {
+                    var nX = (cur.x + dir1[d] + Width) % Width; // side can go through
+                    var nY = cur.y + dir2[d];
+                    if (nY < 0 || nY >= Height) continue;
+                    if (_map[nY, nX].IsWall) continue;
+                    if (passed.Contains((nX, nY))) continue;
+                    if (_map[nY, nX].IsPac) continue;       // avoid collision
+                    var newScore = cur.score + GetScore(nX, nY, zeroScores, true, dist);
+
+                    // if its first move and going back to previous, apply penalty
+                    if (dist == 1 && nX == prevPos.Item1 && nY == prevPos.Item2)
+                        newScore -= 0.8;
+
+                    passed.Add((nX, nY));
+                    prev[(nX, nY)] = (cur.x, cur.y);
+
+                    if (newScore > score)
+                    {
+                        score = newScore;
+                        tgt = (nX, nY);
+                    }
+                    newQueue.Enqueue((newScore, nX, nY));
+                }
+            }
+            que = newQueue;
+        }
+
+        // impossible
+        if (tgt.X == -1) return null;
+
+        // get path
+        var path = new List<(int, int)>();
+        var coord = (tgt.X, tgt.Y);
+        while (prev.ContainsKey(coord))
+        {
+            path.Add(coord);
+            coord = prev[coord];
+        }
+        path.Add(coord);
+        path.Reverse();
+
+        var act = new Action { Pac = pac, IsMove = true, NextX = path[1].Item1, NextY = path[1].Item2, Path = path, TargetX = tgt.X, TargetY = tgt.Y, Distance = path.Count(), ExpScore = score };
+        return act;
+    }
+
+    HashSet<(int, int)> GetZeroScores(List<Action> actions)
+    {
+        var ret = new HashSet<(int, int)>();
+        foreach (var act in actions) AddToZeroScores(act, ret);        
+        return ret;
+    }
+
+    void AddToZeroScores(Action act, HashSet<(int, int)> zeroScores)
+    {
+        if (!act.IsMove) return;
+        zeroScores.Add((act.NextX, act.NextY));
+        zeroScores.Add((act.TargetX, act.TargetY));
+        foreach (var p in act.Path)
+            zeroScores.Add((p.x, p.y));
     }
 
     (List<(int x, int y)> path, double score) FindPath(CellItem st, CellItem tgt, bool ignoreEnemy,
@@ -504,10 +608,12 @@ public class Game
         passed.Add((st.X, st.Y));
         que.Push((0, st.X, st.Y));
 
+        var dist = 0;
         var score = -1.0;
         var done = false;
         while (!done && que.Count() != 0)
         {
+            dist++;
             var newQueue = new PriorityQueue<(double score, int x, int y)>(cmp);
             while (que.Count() != 0)
             {
@@ -521,7 +627,7 @@ public class Game
                     if (_map[nY, nX].IsWall) continue;
                     if (passed.Contains((nX, nY))) continue;
                     if (!ignoreEnemy && _map[nY, nX].IsEnemyPac) continue;       // avoid collision
-                    var newScore = cur.score + GetScore(nX, nY, zeroScores, applyUncertainityForScore);
+                    var newScore = cur.score + GetScore(nX, nY, zeroScores, applyUncertainityForScore, dist);
 
                     passed.Add((nX, nY));
                     prev[(nX, nY)] = (cur.x, cur.y);
@@ -557,16 +663,14 @@ public class Game
         return (path, score);
     }
 
-    double GetScore(int x, int y, HashSet<(int, int)> zeroScores, bool applyUncertainityForScore)
+    double GetScore(int x, int y, HashSet<(int, int)> zeroScores, bool applyUncertainityForScore, int additionalUnsercaionity)
     {
         if (zeroScores != null && zeroScores.Contains((x, y))) return 0;
         if (!_map[y, x].IsPellet) return 0;
         var pellet = _map[y, x] as Pellet;
-
         var ret = pellet.Value;
         if (!applyUncertainityForScore) return ret;
-
-        return ret * (200 - pellet.UncertaintyLevel) / 200.0;
+        return ret * (230 - pellet.UncertaintyLevel - additionalUnsercaionity) / 230.0;
     }
 
     List<(int, int)> GetAdjuscents(CellItem item)
