@@ -416,15 +416,16 @@ public class Game
         
         var actions = new List<Action>();
         var zeroScores = new HashSet<(int, int)>();
+        var nexts = new HashSet<(int, int)>();
 
         // better make speed up?
-        AddActions_SpeedUp(actions, zeroScores);
+        AddActions_SpeedUp(actions, zeroScores, nexts);
 
         // trys to get super pellets if possible
-        AddActions_SuperPellet(actions, zeroScores);
+        AddActions_SuperPellet(actions, zeroScores, nexts);
 
         // find path for the best score in several steps
-        AddActions_BestScoreExp(actions, zeroScores);
+        AddActions_BestScoreExp(actions, zeroScores, nexts);
 
         Util.Log(actions);
         return GetAns(actions);
@@ -441,7 +442,7 @@ public class Game
         return ret.ToString();
     }
 
-    void AddActions_SpeedUp(List<Action> actions, HashSet<(int, int)> zeroScores)
+    void AddActions_SpeedUp(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
         var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
         var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).Where(p => p.AbilityCoolDown == 0);
@@ -464,7 +465,7 @@ public class Game
         }
     }
 
-    void AddActions_SuperPellet(List<Action> actions, HashSet<(int, int)> zeroScores)
+    void AddActions_SuperPellet(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
         var superPellets = _pellets.Where(p => p.Value > 1);
         // no super pellets
@@ -490,12 +491,12 @@ public class Game
         // from shorter path 
         info = info.OrderBy(i => i.pathInfo.path.Count()).ToList();
 
-        // up to two pacs will be assinged
+        // up to ONE pacs will be assinged
         var assignment = new Dictionary<Pellet, List<(Pac pac, int nextX, int nextY, int distance, List<(int, int)> willingPath)>>();
         foreach (var p in superPellets) assignment[p] = new List<(Pac pac, int nextX, int nextY, int distance, List<(int, int)> willingPath)>();
 
         var used = new HashSet<Pac>();
-        for (int cnt = 0; cnt < 2; cnt++)
+        for (int cnt = 0; cnt < 1; cnt++)
         {
             for (int i = 0; i < info.Count(); i++)
             {
@@ -504,7 +505,10 @@ public class Game
                 var pac = info[i].pac;
                 if (used.Contains(pac)) continue;
                 if (assignment[pellet].Count() > cnt) continue;
+                // collision
+                if (nexts.Contains((pathInfo.path[1].x, pathInfo.path[1].y))) continue;
                 assignment[pellet].Add((pac, pathInfo.path[1].x, pathInfo.path[1].y, pathInfo.path.Count(), pathInfo.path));
+                nexts.Add((pathInfo.path[1].x, pathInfo.path[1].y));
                 used.Add(pac);
             }
         }
@@ -521,21 +525,21 @@ public class Game
         }
     }
 
-    void AddActions_BestScoreExp(List<Action> actions, HashSet<(int, int)> zeroScores)
+    void AddActions_BestScoreExp(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
         var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
         var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).ToList();
 
         foreach (var mypac in myPacs)
         {
-            var act = GetBestScoreAction(mypac, zeroScores);
+            var act = GetBestScoreAction(mypac, zeroScores, nexts);
             if (act == null) continue;
             actions.Add(act);
             AddToZeroScores(act, zeroScores);
         }
     }
 
-    Action GetBestScoreAction(Pac pac, HashSet<(int, int)> zeroScores)
+    Action GetBestScoreAction(Pac pac, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
         int max_path_size = 15;
         int path_size = 5;
@@ -550,7 +554,7 @@ public class Game
         que.Enqueue((0, pac.X, pac.Y));
 
         var dist = 0;
-        var score = -1.0;
+        var score = -100.0;
         (int X, int Y) tgt = (-1, -1);
         while (que.Count() != 0)
         {
@@ -569,7 +573,11 @@ public class Game
                     if (nY < 0 || nY >= Height) continue;
                     if (_map[nY, nX].IsWall) continue;
                     if (passed.Contains((nX, nY))) continue;
+                    if (IsNextTo(_map[nY, nX], "PAC_ENEMY", false)) continue;  // avoid enemy
                     if (_map[nY, nX].IsPac) continue;       // avoid collision
+                    // other pac is trying to move to this space
+                    if (dist == 1 && nexts.Contains((nX, nY))) continue;
+
                     var newScore = cur.score + GetScore(nX, nY, zeroScores, true, dist);
 
                     // if its first move and going back to previous, apply penalty
@@ -605,6 +613,7 @@ public class Game
         path.Reverse();
 
         var act = Action.GetMove(pac, path, score);
+        nexts.Add((act.NextX, act.NextY));
         return act;
     }
 
