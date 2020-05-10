@@ -215,6 +215,32 @@ public class Action
         if (IsMove) return "MOVE " + Pac.ID + " " + NextX + " " + NextY;
         return "";
     }
+
+    public static Action GetMove(Pac pac, List<(int x, int y)> path, double score)
+    {
+        var nextX = path[1].x;
+        var nextY = path[1].y;
+        if(pac.SpeedTurnsLeft > 0 && path.Count() > 2)
+        {
+            nextX = path[2].x;
+            nextY = path[2].y;
+        }
+        var targetX = path.Last().x;
+        var targetY = path.Last().y;
+
+        return new Action
+        {
+            Pac = pac,
+            IsMove = true,
+            NextX = nextX,
+            NextY = nextY,
+            Path = path,
+            TargetX = targetX,
+            TargetY = targetY,
+            Distance = path.Count(),
+            ExpScore = score
+        };
+    }
 }
 
 public class Game
@@ -259,7 +285,7 @@ public class Game
         if (_prevMap == null) _prevMap = InitMap(Grid, Height, Width);
 
         _map = UpdateMap(_prevMap, Height, Width, _pacs, _pellets, _prevPacs);
-        Util.Log(_map);
+        //Util.Log(_map);
         _prevMap = _map;
     }
 
@@ -488,7 +514,7 @@ public class Game
         {
             foreach(var tpl in assignment[pellet])
             {
-                var action = new Action { Pac = tpl.pac, IsMove = true, NextX = tpl.nextX, NextY = tpl.nextY, TargetX = pellet.X, TargetY = pellet.Y, Distance = tpl.distance, Path = tpl.willingPath};
+                var action = Action.GetMove(tpl.pac, tpl.willingPath, -1);
                 actions.Add(action);
                 AddToZeroScores(action, zeroScores);
             }
@@ -512,6 +538,7 @@ public class Game
     Action GetBestScoreAction(Pac pac, HashSet<(int, int)> zeroScores)
     {
         int max_path_size = 15;
+        int path_size = 5;
 
         var prevPos = GetPrevPos(pac, _prevPacs);
         var que = new Queue<(double score, int x, int y)>();
@@ -528,6 +555,7 @@ public class Game
         while (que.Count() != 0)
         {
             dist++;
+            if (dist >= path_size && score > 0) break;
             if (dist >= max_path_size) break;
 
             var newQueue = new Queue<(double score, int x, int y)>();
@@ -546,7 +574,7 @@ public class Game
 
                     // if its first move and going back to previous, apply penalty
                     if (dist == 1 && nX == prevPos.Item1 && nY == prevPos.Item2)
-                        newScore -= 0.8;
+                        newScore -= 15;
 
                     passed.Add((nX, nY));
                     prev[(nX, nY)] = (cur.x, cur.y);
@@ -576,7 +604,7 @@ public class Game
         path.Add(coord);
         path.Reverse();
 
-        var act = new Action { Pac = pac, IsMove = true, NextX = path[1].Item1, NextY = path[1].Item2, Path = path, TargetX = tgt.X, TargetY = tgt.Y, Distance = path.Count(), ExpScore = score };
+        var act = Action.GetMove(pac, path, score);
         return act;
     }
 
