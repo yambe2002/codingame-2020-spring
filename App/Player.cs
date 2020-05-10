@@ -115,6 +115,17 @@ public static class Util
         if (val < 0) return int.MaxValue;
         return val;
     }
+
+    public static void Log(List<Action> actions)
+    {
+        foreach (var action in actions)
+            Log(action);
+    }
+
+    public static void Log(Action action)
+    {
+        Log("ID: " + action.Pac.ID + "  Target: " + action.TargetX + "," + action.TargetY + " Next: " + action.NextX + "," + action.NextY);
+    }
 }
 
 public class CellItem
@@ -123,6 +134,7 @@ public class CellItem
     public int Y;
 
     public bool IsPac => this is Pac;
+    public bool IsEnemyPac => IsPac && !(this as Pac).Mine;
     public bool IsPellet => this is Pellet;
     public bool IsWall => this is Wall;
     public bool IsFloor => this is Floor;
@@ -172,6 +184,35 @@ public class Pellet : CellItem
     public override string ToString()
     {
         return Value == 10 ? "T" : Value.ToString();
+    }
+}
+
+public class Action
+{
+    public Pac Pac;
+
+    // SPEED
+    public bool IsSpeed;
+
+    // SWITCH
+    public bool IsSwitch;
+    public int NextType;
+
+    // MOVE
+    public bool IsMove;
+    public int NextX = -1;
+    public int NextY = -1;
+    public int TargetX;
+    public int TargetY;
+    public int Distance;
+    public List<(int x, int y)> Path;
+
+    public override string ToString()
+    {
+        if (IsSpeed) return "SPEED " + Pac.ID;
+        if (IsSwitch) return "SWITCH " + Pac.ID + " " + NextType;
+        if (IsMove) return "MOVE " + Pac.ID + " " + NextX + " " + NextY;
+        return "";
     }
 }
 
@@ -346,153 +387,186 @@ public class Game
     {
         CreateMap();
 
+        var actions = new List<Action>();
+
+        // better make speed up?
+        AddActions_SpeedUp(actions);
+
+        // trys to get super pellets if possible
+        AddActions_SuperPellet(actions);
+
+        // TODO: implement
+
+
+        Util.Log(actions);
+        return GetAns(actions);
+    }
+
+    string GetAns(List<Action> actions)
+    {
         var ret = new StringBuilder();
-        var avoid = new HashSet<(int, int)>();  // avoid moving to the same spot
-
-        var myPacs = _pacs.Where(p => p.Mine);
-        var enemyPacs = _pacs.Where(p => !p.Mine);
-        // avoid moving to enemy
-        foreach (var e in enemyPacs)
+        for(int i=0; i<actions.Count(); i++)
         {
-            avoid.Add((e.X, e.Y));
-            foreach(var n in GetAdjuscents(e)) avoid.Add(n);
-        }
-
-        // consider pacs close to large pellet and cluster pellet first
-        myPacs = myPacs.OrderBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, true, GetPrevPos(p), false).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE_CLUSTER", avoid, true, true, GetPrevPos(p), false).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true, true, GetPrevPos(p), false).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE", avoid, true, false, GetPrevPos(p), false).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_LARGE_CLUSTER", avoid, true, false, GetPrevPos(p), false).distance)).
-            ThenBy(p => Util.NegToINF(FindClosest(p, "PELLET_CLUSTER", avoid, true, false, GetPrevPos(p), false).distance));
-       
-
-        // MOVE
-        foreach (var pac in myPacs)
-        {
-            Util.Log("ID: " + pac.ID + " - " + pac.X + "," + pac.Y);
-
-            // speed up always if possible
-            if (pac.AbilityCoolDown == 0)
-            {
-                if (ret.Length > 0) ret.Append(" | ");
-                ret.Append("SPEED " + pac.ID);
-                continue;
-            }
-
-            // avoid to go back
-            var prevPos = GetPrevPos(pac);
-            Util.Log("  prev: " + prevPos.Select(p => p.Item1 + "," + p.Item2).Aggregate((a, b) => a + "|" + b));
-
-            (int x, int y, int distance, int tgtX, int tgtY) tgt = (-1, -1, -1, -1, -1);
-
-            foreach (var useAvoid in new bool[] { true, false })
-            {
-                foreach (var certainPellet in new bool[] { true, false })
-                {
-                    var smallPellet = FindClosest(pac, "PELLET_1", avoid, useAvoid, certainPellet, prevPos, false);
-                    var largePellet = FindClosest(pac, "PELLET_LARGE", avoid, useAvoid, certainPellet, prevPos, false);
-                    var largeclusterPellet = FindClosest(pac, "PELLET_LARGE_CLUSTER", avoid, useAvoid, certainPellet, prevPos, false);
-                    var clusterPellet = FindClosest(pac, "PELLET_CLUSTER", avoid, useAvoid, certainPellet, prevPos, false);
-
-                    Util.Log("large pellet: ", largePellet);
-                    Util.Log("large cluster pellet: ", largeclusterPellet);
-                    Util.Log("cluster pellet: ", clusterPellet);
-                    Util.Log("small pellet: ", smallPellet);
-
-                    // prefers large pellet
-                    if (largePellet.x != -1 && smallPellet.x != -1 && largePellet.distance - smallPellet.distance <= 10)
-                        tgt = largePellet;
-                    else if (largeclusterPellet.x != -1 && smallPellet.x != -1 && largeclusterPellet.distance - smallPellet.distance <= 10)
-                        tgt = largeclusterPellet;
-                    else if (clusterPellet.x != -1 && smallPellet.x != -1 && clusterPellet.distance - smallPellet.distance <= 5)
-                        tgt = clusterPellet;
-                    else
-                        tgt = smallPellet;
-
-                    if (tgt.x != -1) break;
-                }
-                
-                // still no good target position found => goto the closest crossing
-                if (tgt.x == -1)
-                {
-                    tgt = FindClosest(pac, "CROSSING", avoid, useAvoid, false, prevPos, false);
-                    Util.Log("crossing: ", tgt);
-                }
-
-                // still no good target position found => goto the closest curve
-                if (tgt.x == -1)
-                {
-                    tgt = FindClosest(pac, "CURVE", avoid, useAvoid, false, prevPos, false);
-                    Util.Log("curve: ", tgt);
-                }
-
-                // still no? => just move to next floor
-                if (tgt.x == -1)
-                {
-                    tgt = FindClosest(pac, "FLOOR", avoid, useAvoid, false, prevPos, false);
-                    Util.Log("next floor: ", tgt);
-                }
-
-                // still no? => just move to next floor, even previous position
-                if (tgt.x == -1)
-                {
-                    tgt = FindClosest(pac, "FLOOR", avoid, useAvoid, false, prevPos, true);
-                    Util.Log("next floor (allow prev): ", tgt);
-                }
-
-                if (tgt.x != -1) break;
-            }
-
-            if (tgt.x == -1) Util.Log("could not find any move");
-
-            if (tgt.x == -1) continue;  // should not happen
-            AddToAvoid((tgt.x, tgt.y), avoid);
-
-            // avoid collision
-            var adjs = GetAdjuscents(pac);
-            avoid.Add((pac.X, pac.Y));
-            foreach (var adj in adjs) avoid.Add(adj);
-
             if (ret.Length > 0) ret.Append(" | ");
-            ret.Append("MOVE " + pac.ID + " " + tgt.x + " " + tgt.y);
+            ret.Append(actions[i].ToString());
         }
-
         return ret.ToString();
     }
 
-    void AddToAvoid((int x, int y) st, HashSet<(int, int)> avoid)
+    void AddActions_SpeedUp(List<Action> actions)
     {
-        avoid.Add((st));
-        if (!_map[st.y, st.x].IsPellet) return;
+        var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
+        var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).Where(p => p.AbilityCoolDown == 0);
+        if (!myPacs.Any()) return;
 
-        // avoid so that multiple pacs go to the same pellet island, within dist=3
-        var que = new Queue<(int, int)>();
-        var passed = new HashSet<(int, int)>();
-        que.Enqueue(st);
-        passed.Add(st);
-        var cnt = 0;
-        while(que.Any())
+        var enemyPacs = _pacs.Where(p => !p.Mine);
+        var superPellets = _pellets.Where(p => p.Value > 1);
+        var doSpeedUp = false;
+
+        // if there are any super pellets, better speed up
+        if (superPellets.Any()) doSpeedUp = true;
+
+        // do always if possible
+        doSpeedUp = true;
+
+        if (doSpeedUp)
         {
-            var newQue = new Queue<(int, int)>();
-            while (que.Any())
+            foreach (var myPac in myPacs)
+                actions.Add(new Action { Pac = myPac, IsSpeed = true });
+        }
+    }
+
+    void AddActions_SuperPellet(List<Action> actions)
+    {
+        var superPellets = _pellets.Where(p => p.Value > 1);
+        // no super pellets
+        if (!superPellets.Any()) return;
+
+        var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
+        var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).ToList();
+        if (!myPacs.Any()) return;
+        var enemyPacs = _pacs.Where(p => !p.Mine);
+
+        // (distance, pellet, pac)
+        var info = new List<((List<(int x, int y)> path, double score) pathInfo, Pellet pellet, Pac pac)>();
+        foreach(var pellet in superPellets)
+        {
+            foreach(var pac in myPacs)
             {
-                var item = que.Dequeue();
-                avoid.Add(item);
+                var path = FindPath(pac, pellet, false, null, false); // ignore score
+                if (path.path == null) continue;
+                info.Add((path, pellet, pac));
+            }
+        }
+
+        // from shorter path 
+        info = info.OrderBy(i => i.pathInfo.path.Count()).ToList();
+
+        // up to two pacs will be assinged
+        var assignment = new Dictionary<Pellet, List<(Pac pac, int nextX, int nextY, int distance, List<(int, int)> willingPath)>>();
+        foreach (var p in superPellets) assignment[p] = new List<(Pac pac, int nextX, int nextY, int distance, List<(int, int)> willingPath)>();
+
+        var used = new HashSet<Pac>();
+        for (int cnt = 0; cnt < 2; cnt++)
+        {
+            for (int i = 0; i < info.Count(); i++)
+            {
+                var pathInfo = info[i].pathInfo;
+                var pellet = info[i].pellet;
+                var pac = info[i].pac;
+                if (used.Contains(pac)) continue;
+                if (assignment[pellet].Count() > cnt) continue;
+                assignment[pellet].Add((pac, pathInfo.path[1].x, pathInfo.path[1].y, pathInfo.path.Count(), pathInfo.path));
+                used.Add(pac);
+            }
+        }
+        
+        // make move
+        foreach(var pellet in assignment.Keys)
+        {
+            foreach(var tpl in assignment[pellet])
+            {
+                var action = new Action { Pac = tpl.pac, IsMove = true, NextX = tpl.nextX, NextY = tpl.nextY, TargetX = pellet.X, TargetY = pellet.Y, Distance = tpl.distance, Path = tpl.willingPath};
+                actions.Add(action);
+            }
+        }
+    }
+
+    (List<(int x, int y)> path, double score) FindPath(CellItem st, CellItem tgt, bool ignoreEnemy,
+        HashSet<(int, int)> zeroScores, bool applyUncertainityForScore)
+    {
+        var cmp = new ScoreTplComparer<(double score, int x, int y)>();
+        var que = new PriorityQueue<(double score, int x, int y)>(cmp);   // score should come first
+
+        var passed = new HashSet<(int x, int y)>();
+        var prev = new Dictionary<(int, int), (int, int)>();
+
+        passed.Add((st.X, st.Y));
+        que.Push((0, st.X, st.Y));
+
+        var score = -1.0;
+        var done = false;
+        while (!done && que.Count() != 0)
+        {
+            var newQueue = new PriorityQueue<(double score, int x, int y)>(cmp);
+            while (que.Count() != 0)
+            {
+                var cur = que.Pop();
+
                 for (int d = 0; d < 4; d++)
                 {
-                    var nX = (item.Item1 + dir1[d] + Width) % Width; // side can go through
-                    var nY = item.Item2 + dir2[d];
+                    var nX = (cur.x + dir1[d] + Width) % Width; // side can go through
+                    var nY = cur.y + dir2[d];
                     if (nY < 0 || nY >= Height) continue;
-                    if (!_map[nY, nX].IsPellet) continue;
+                    if (_map[nY, nX].IsWall) continue;
                     if (passed.Contains((nX, nY))) continue;
-                    newQue.Enqueue((nX, nY));
+                    if (!ignoreEnemy && _map[nY, nX].IsEnemyPac) continue;       // avoid collision
+                    var newScore = cur.score + GetScore(nX, nY, zeroScores, applyUncertainityForScore);
+
+                    passed.Add((nX, nY));
+                    prev[(nX, nY)] = (cur.x, cur.y);
+
+                    // goal!
+                    if (_map[nY, nX] == tgt)
+                    {
+                        score = newScore;
+                        done = true;
+                        break;
+                    }
+                    // not goal
+                    newQueue.Push((newScore, nX, nY));
                 }
             }
-            cnt++;
-            if (cnt == 3) break;
-            que = newQue;
+            que = newQueue;
         }
+
+        // impossible
+        if (!done) return (null, -1);
+
+        // get path
+        var path = new List<(int, int)>();
+        var coord = (tgt.X, tgt.Y);
+        while(prev.ContainsKey(coord))
+        {
+            path.Add(coord);
+            coord = prev[coord];
+        }
+        path.Add(coord);
+        path.Reverse();
+
+        return (path, score);
+    }
+
+    double GetScore(int x, int y, HashSet<(int, int)> zeroScores, bool applyUncertainityForScore)
+    {
+        if (zeroScores != null && zeroScores.Contains((x, y))) return 0;
+        if (!_map[y, x].IsPellet) return 0;
+        var pellet = _map[y, x] as Pellet;
+
+        var ret = pellet.Value;
+        if (!applyUncertainityForScore) return ret;
+
+        return ret * (200 - pellet.UncertaintyLevel) / 200.0;
     }
 
     List<(int, int)> GetAdjuscents(CellItem item)
@@ -675,5 +749,155 @@ public class Game
         if (floors[0].Item1 == floors[1].Item1) return false;
         if (floors[0].Item2 == floors[1].Item2) return false;
         return true;
+    }
+}
+
+public class ScoreTplComparer<T> : IComparer<T>
+{
+    public int Compare(T x, T y)
+    {
+        var tx = (x as (double score, int x, int y)?).Value;
+        var ty = (y as (double score, int x, int y)?).Value;
+        return ty.score.CompareTo(tx.score);
+    }
+}
+
+public class PriorityQueue<T> where T : IComparable
+{
+    private IComparer<T> _comparer = null;
+    private int _type = 0;
+
+    private T[] _heap;
+    private int _sz = 0;
+
+    private int _count = 0;
+
+    /// <summary>
+    /// Priority Queue with custom comparer
+    /// </summary>
+    public PriorityQueue(IComparer<T> comparer)
+    {
+        _heap = new T[128];
+        _comparer = comparer;
+    }
+
+    /// <summary>
+    /// Priority queue
+    /// </summary>
+    /// <param name="type">0: asc, 1:desc</param>
+    public PriorityQueue(int type = 0)
+    {
+        _heap = new T[128];
+        _type = type;
+    }
+
+    private int Compare(T x, T y)
+    {
+        if (_comparer != null) return _comparer.Compare(x, y);
+        return _type == 0 ? x.CompareTo(y) : y.CompareTo(x);
+    }
+
+    public void Push(T x)
+    {
+        _count++;
+        if (_count > _heap.Length)
+        {
+            var newheap = new T[_heap.Length * 2];
+            for (int n = 0; n < _heap.Length; n++) newheap[n] = _heap[n];
+            _heap = newheap;
+        }
+
+        //node number
+        var i = _sz++;
+
+        while (i > 0)
+        {
+            //parent node number
+            var p = (i - 1) / 2;
+
+            if (Compare(_heap[p], x) <= 0) break;
+
+            _heap[i] = _heap[p];
+            i = p;
+        }
+
+        _heap[i] = x;
+    }
+
+    public T Pop()
+    {
+        _count--;
+
+        T ret = _heap[0];
+        T x = _heap[--_sz];
+
+        int i = 0;
+        while (i * 2 + 1 < _sz)
+        {
+            //children
+            int a = i * 2 + 1;
+            int b = i * 2 + 2;
+
+            if (b < _sz && Compare(_heap[b], _heap[a]) < 0) a = b;
+
+            if (Compare(_heap[a], x) >= 0) break;
+
+            _heap[i] = _heap[a];
+            i = a;
+        }
+
+        _heap[i] = x;
+
+        return ret;
+    }
+
+    public int Count()
+    {
+        return _count;
+    }
+
+    public T Peek()
+    {
+        return _heap[0];
+    }
+
+    public bool Contains(T x)
+    {
+        for (int i = 0; i < _sz; i++) if (x.Equals(_heap[i])) return true;
+        return false;
+    }
+
+    public void Clear()
+    {
+        while (this.Count() > 0) this.Pop();
+    }
+
+    public IEnumerator<T> GetEnumerator()
+    {
+        var ret = new List<T>();
+
+        while (this.Count() > 0)
+        {
+            ret.Add(this.Pop());
+        }
+
+        foreach (var r in ret)
+        {
+            this.Push(r);
+            yield return r;
+        }
+    }
+
+    public T[] ToArray()
+    {
+        T[] array = new T[_sz];
+        int i = 0;
+
+        foreach (var r in this)
+        {
+            array[i++] = r;
+        }
+
+        return array;
     }
 }
