@@ -478,9 +478,10 @@ public class Game
         var actions = new List<Action>();
         var zeroScores = new HashSet<(int, int)>();
         var nexts = new HashSet<(int, int)>();
+        var dontSpeetup = new HashSet<Pac>();
 
         // action when there are enemy close
-        AddActions_ChangeTypeOrRunAway(actions, zeroScores, nexts);
+        AddActions_ChangeTypeOrRunAway(actions, zeroScores, nexts, dontSpeetup);
 
         // better make speed up?
         AddActions_SpeedUp(actions, zeroScores, nexts);
@@ -498,7 +499,7 @@ public class Game
     string GetAns(List<Action> actions)
     {
         var ret = new StringBuilder();
-        for(int i=0; i<actions.Count(); i++)
+        for (int i = 0; i < actions.Count(); i++)
         {
             if (ret.Length > 0) ret.Append(" | ");
             ret.Append(actions[i].ToString());
@@ -506,7 +507,7 @@ public class Game
         return ret.ToString();
     }
 
-    void AddActions_ChangeTypeOrRunAway(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+    void AddActions_ChangeTypeOrRunAway(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts, HashSet<Pac> dontSpeetup)
     {
         var enemyPacs = _pacs.Where(p => !p.Mine && !p.IsDead);
 
@@ -524,15 +525,14 @@ public class Game
             }
             foreach(var tgtDist in dists.OrderBy(d => d.path.Count()))
             {
-                AddActions_ChangeTypeOrRunAway(tgtDist.pac, enemy, tgtDist.path, actions, zeroScores, nexts);
+                AddActions_ChangeTypeOrRunAway(tgtDist.pac, enemy, tgtDist.path, actions, zeroScores, nexts, dontSpeetup);
             }
         }
     }
 
     void AddActions_ChangeTypeOrRunAway(Pac myPac, Pac enemy, List<(int, int)> pathToEnemy, List<Action> actions, 
-        HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+        HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts, HashSet<Pac> dontSpeedUp)
     {
-        if (pathToEnemy.Count() >= 4) return;   // far enough to ignore
         var distance = pathToEnemy.Count() - 1;
 
         // very close
@@ -543,104 +543,27 @@ public class Game
             {                
                 if (!enemy.CanSwitch)   // enemy cannot switch his type
                 {
+                    // attack only if I can win in high posibility
                     if(myPac.AtSpeed && !enemy.AtSpeed)
                         AddActions_Attack(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
-                    // no need to worry
-                }
-                else   // enemy can switch his type
-                {
-                    if (myPac.CanSwitch)
-                    {
-                        // both enemy and i can switch
-                        var nextType = myPac.TypeForWin_Cross(enemy);
-                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
-                    }
-                    else
-                    {
-                        // enemy can switch, but i'm not
-                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
-                    }
                 }
             }
             else if(myPac.Evens(enemy))
             {
-                // even
-                if (!enemy.CanSwitch) // enemy cannot switch his type
+                if(enemy.CanSwitch && !myPac.CanSwitch)  // enemy can switch but I cannot => run away, no time to speed up!
                 {
-                    if(myPac.CanSwitch)
-                    {
-                        // switch to th winning state
-                        var nextType = Pac.TypeForWin(enemy);
-                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
-                    }
-                    else
-                    {
-                        // neither can switch the state
-                        if(myPac.TotalTimeUntilSwitchable < enemy.TotalTimeUntilSwitchable)
-                        {
-                            // mypac need more time for cool down => better run away!
-                            AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
-                        }
-                    }
-                }
-                else
-                {
-                    if(myPac.CanSwitch)  // both enemy and i can switch
-                    {
-                        // switch to the cross winning state
-                        var nextType = myPac.TypeForWin_Cross(enemy);
-                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
-
-                    }
-                    else  // enemy can switch type but i cannot => run away!
-                    {
-                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
-                    }
+                    dontSpeedUp.Add(myPac);
                 }
             }
             else
             {
                 // losing
-
-                if (!enemy.CanSwitch)    // enemy cannot switch his type
+                // change type only if enemy is at speed and I'm not => urgent
+                if (!myPac.AtSpeed && enemy.AtSpeed)
                 {
-                    if(myPac.CanSwitch)  // but i can swith
-                    {
-                        // switch to winning type
-                        var nextType = Pac.TypeForWin(enemy);
-                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
-                    }
-                    else  // neither can switch
-                    {
-                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
-                    }
+                    var nextType = Pac.TypeForWin(enemy);
+                    AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
                 }
-                else // enemy can switch his type
-                {
-                    if (myPac.CanSwitch) // i can switch type too
-                    {
-                        // hope enemy is smart (cross change)
-                        var nextType = myPac.TypeForWin_Cross(enemy);
-                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
-                    }
-                    else
-                    {
-                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
-                    }
-                }
-            }
-        }
-        else
-        {
-            // relatively close
-            if (myPac.Wins(enemy))
-            {
-                // winning state? => no need to worry
-            }
-            else
-            {
-                // losing state? => just one step back
-                AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
             }
         }
     }
@@ -671,28 +594,6 @@ public class Game
             actions.Add(act);
             nexts.Add((pathToEnemy[1].Item1, pathToEnemy[1].Item2));
             zeroScores.Add((pathToEnemy[1].Item1, pathToEnemy[1].Item2));
-            return;
-        }
-    }
-
-    void AddActions_RunAway(Pac myPac, Pac enemy, List<(int, int)> pathToEnemy, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
-    {
-        if (pathToEnemy == null) pathToEnemy = FindPath(myPac, enemy, false, null, false).path;
-        if (pathToEnemy?.Any() != true || pathToEnemy.Count() < 2) return;
-
-        var invalids = new HashSet<(int, int)> { pathToEnemy[1], (myPac.X, myPac.Y) };
-
-        foreach (var n in GetAdjuscents(myPac))
-        {
-            if (invalids.Contains(n)) continue;
-            if (_map[n.Item2, n.Item1].IsWall) continue;
-
-            // found good route to run away
-
-            var act = new Action { Pac = myPac, NextX = n.Item1, NextY = n.Item2, TargetX = n.Item1, TargetY = n.Item2, IsMove = true, IsRun = true };
-            actions.Add(act);
-            nexts.Add((n.Item1, n.Item2));
-            zeroScores.Add((n.Item1, n.Item2));
             return;
         }
     }
