@@ -127,6 +127,13 @@ public static class Util
         Log("ID: " + action.Pac.ID + "  Target: " + action.TargetX + "," + action.TargetY + " Next: " + action.NextX + "," + action.NextY + " ExpScore:" + action.ExpScore +
             (action.IsAttack ? " *Attach*" : "") + (action.IsRun ? " *Run" : ""));
     }
+
+    public static void Log(List<(int, int)> path)
+    {
+        foreach (var p in path)
+            Console.Error.Write(p.Item1 + "," + p.Item2 + "|");
+        Console.Error.WriteLine();
+    }
 }
 
 public class CellItem
@@ -710,7 +717,7 @@ public class Game
         que.Enqueue((0, pac.X, pac.Y));
 
         var dist = 0;
-        var score = 0.0;
+        var score = -1.0;
         (int X, int Y) tgt = (-1, -1);
         while (que.Count() != 0)
         {
@@ -768,9 +775,45 @@ public class Game
         path.Add(coord);
         path.Reverse();
 
+        (path, score) = GetBestScoreAction_TakeSinglePellet(pac, zeroScores, nexts, path, score);
+
         var act = Action.GetMove(pac, path, score);
         nexts.Add((act.NextX, act.NextY));
         return act;
+    }
+
+    (List<(int, int)> path, double score) GetBestScoreAction_TakeSinglePellet(Pac pac, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts, 
+        List<(int, int)> path, double score)
+    {
+        for (int i = 0; i < path.Count(); i++)
+        {
+            var prevCell = i == 0 ? GetPrevPos(pac, _prevPacs) : path[i - 1];
+            var pathCell = path[i];
+
+            // find a pell with just one distance => take it!
+            foreach (var n in GetAdjuscents(_map[pathCell.Item2, pathCell.Item1]))
+            {
+                if (n.Item1 == prevCell.Item1 && n.Item2 == prevCell.Item2) continue;
+                if (zeroScores.Contains(n)) continue;
+                if (nexts.Contains(n)) continue;
+                if (!_map[n.Item2, n.Item1].IsPellet) continue;
+                // close to enemy
+                if (IsNextTo(_map[n.Item2, n.Item1], "PAC_ENEMY", true)) continue;
+
+                var tgt = n.Item1 == 30 && n.Item2 == 3;
+
+                var pelletsAround = GetAdjuscents(_map[n.Item2, n.Item1]).Where(x => x.Item1 != pathCell.Item1 || x.Item2 != pathCell.Item2)
+                        .Where(x => _map[x.Item2, x.Item1].IsPellet);
+
+                if (pelletsAround.Count() == 0)
+                {
+                    Util.Log("Pac " + pac.ID + " - found single pellet close by -> Just take it");
+                    return FindPath(pac, _map[n.Item2, n.Item1], true, zeroScores, true);                    
+                }
+            }
+        }
+
+        return (path, score); // no change
     }
 
     HashSet<(int, int)> GetZeroScores(List<Action> actions)
@@ -871,7 +914,7 @@ public class Game
         var ret = new List<(int, int)>();
         for (int d = 0; d < 4; d++)
         {
-            var nX = (item.X + dir1[d] + Width) % Width; // side can go through
+            var nX = (item.X + dir1[d] + Width) % Width; // pac can go through side edges
             var nY = item.Y + dir2[d];
             if (nY < 0 || nY >= Height) continue;
             if (_map[nY, nX].IsWall) continue;
