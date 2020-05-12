@@ -124,7 +124,8 @@ public static class Util
 
     public static void Log(Action action)
     {
-        Log("ID: " + action.Pac.ID + "  Target: " + action.TargetX + "," + action.TargetY + " Next: " + action.NextX + "," + action.NextY + " ExpScore:" + action.ExpScore);
+        Log("ID: " + action.Pac.ID + "  Target: " + action.TargetX + "," + action.TargetY + " Next: " + action.NextX + "," + action.NextY + " ExpScore:" + action.ExpScore +
+            (action.IsAttack ? " *Attach*" : "") + (action.IsRun ? " *Run" : ""));
     }
 }
 
@@ -163,6 +164,11 @@ public class Floor : CellItem
 }
 public class Pac : CellItem
 {
+    // ROCK or PAPER or SCISSORS
+    public static string ROCK = "ROCK";
+    public static string PAPER = "PAPER";
+    public static string SCISSORS = "SCISSORS";
+
     public int ID;
     public bool Mine;
     public string TypeId;
@@ -171,12 +177,58 @@ public class Pac : CellItem
 
     public bool IsDead => TypeId == "DEAD";
 
+    public bool AtSpeed => SpeedTurnsLeft > 0;
+    public bool CanSwitch => SpeedTurnsLeft == 0 && AbilityCoolDown == 0;
+
+    public int TotalTimeUntilSwitchable
+    {
+        get
+        {
+            if (!AtSpeed) return AbilityCoolDown;
+            return SpeedTurnsLeft + 10;
+        }
+    }
+
     public Pac(int x, int y) : base(x, y) { }
     public override string ToString()
     {
         if (Mine) return "+";
         else return "^";
     }
+
+    public bool Wins(Pac other)
+    {
+        if (TypeId == ROCK) return other.TypeId == SCISSORS;
+        if (TypeId == SCISSORS) return other.TypeId == PAPER;
+        if (TypeId == PAPER) return other.TypeId == ROCK;
+        return false;
+    }
+
+    public bool Evens(Pac other)
+    {
+        return TypeId == other.TypeId;
+    }
+
+    public static string TypeForWin(Pac other)
+    {
+        return TypeForWin(other.TypeId);
+    }
+
+    public static string TypeForWin(string othetTypeId)
+    {
+        if (othetTypeId == ROCK) return PAPER;
+        if (othetTypeId == SCISSORS) return ROCK;
+        if (othetTypeId == PAPER) return SCISSORS;
+        return null;
+    }
+
+    // when both me and other change their type at the same time
+    public string TypeForWin_Cross(Pac other)
+    {
+        var changedOtherType = TypeForWin(this);
+        return TypeForWin(changedOtherType);
+    }
+
 }
 public class Pellet : CellItem
 {
@@ -198,7 +250,7 @@ public class Action
 
     // SWITCH
     public bool IsSwitch;
-    public int NextType;
+    public string NextType;
 
     // MOVE
     public bool IsMove;
@@ -209,6 +261,8 @@ public class Action
     public int Distance;
     public List<(int x, int y)> Path;
     public double ExpScore;
+    public bool IsAttack;
+    public bool IsRun;
 
     public override string ToString()
     {
@@ -425,6 +479,9 @@ public class Game
         var zeroScores = new HashSet<(int, int)>();
         var nexts = new HashSet<(int, int)>();
 
+        // action when there are enemy close
+        AddActions_ChangeTypeOrRunAway(actions, zeroScores, nexts);
+
         // better make speed up?
         AddActions_SpeedUp(actions, zeroScores, nexts);
 
@@ -449,13 +506,204 @@ public class Game
         return ret.ToString();
     }
 
+    void AddActions_ChangeTypeOrRunAway(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+    {
+        var enemyPacs = _pacs.Where(p => !p.Mine && !p.IsDead);
+
+        foreach(var enemy in enemyPacs)
+        {
+            var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
+            var myPacs = _pacs.Where(p => p.Mine && !p.IsDead).Where(p => !usedMyPacs.Contains(p));
+
+            var dists = new List<(List<(int x, int y)> path, Pac pac)>();
+            foreach(var myPac in myPacs)
+            {
+                var path = FindPath(myPac, enemy, true, null, false);
+                if (path.path == null) continue;
+                dists.Add((path.path, myPac));
+            }
+            foreach(var tgtDist in dists.OrderBy(d => d.path.Count()))
+            {
+                AddActions_ChangeTypeOrRunAway(tgtDist.pac, enemy, tgtDist.path, actions, zeroScores, nexts);
+            }
+        }
+    }
+
+    void AddActions_ChangeTypeOrRunAway(Pac myPac, Pac enemy, List<(int, int)> pathToEnemy, List<Action> actions, 
+        HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+    {
+        if (pathToEnemy.Count() >= 4) return;   // far enough to ignore
+        var distance = pathToEnemy.Count() - 1;
+
+        // very close
+        if (distance == 1 || (distance == 2 && enemy.AtSpeed))
+        {
+            // winning
+            if (myPac.Wins(enemy))
+            {                
+                if (!enemy.CanSwitch)   // enemy cannot switch his type
+                {
+                    if(myPac.AtSpeed && !enemy.AtSpeed)
+                        AddActions_Attack(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
+                    // no need to worry
+                }
+                else   // enemy can switch his type
+                {
+                    if (myPac.CanSwitch)
+                    {
+                        // both enemy and i can switch
+                        var nextType = myPac.TypeForWin_Cross(enemy);
+                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
+                    }
+                    else
+                    {
+                        // enemy can switch, but i'm not
+                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
+                    }
+                }
+            }
+            else if(myPac.Evens(enemy))
+            {
+                // even
+                if (!enemy.CanSwitch) // enemy cannot switch his type
+                {
+                    if(myPac.CanSwitch)
+                    {
+                        // switch to th winning state
+                        var nextType = Pac.TypeForWin(enemy);
+                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
+                    }
+                    else
+                    {
+                        // neither can switch the state
+                        if(myPac.TotalTimeUntilSwitchable < enemy.TotalTimeUntilSwitchable)
+                        {
+                            // mypac need more time for cool down => better run away!
+                            AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
+                        }
+                    }
+                }
+                else
+                {
+                    if(myPac.CanSwitch)  // both enemy and i can switch
+                    {
+                        // switch to the cross winning state
+                        var nextType = myPac.TypeForWin_Cross(enemy);
+                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
+
+                    }
+                    else  // enemy can switch type but i cannot => run away!
+                    {
+                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
+                    }
+                }
+            }
+            else
+            {
+                // losing
+
+                if (!enemy.CanSwitch)    // enemy cannot switch his type
+                {
+                    if(myPac.CanSwitch)  // but i can swith
+                    {
+                        // switch to winning type
+                        var nextType = Pac.TypeForWin(enemy);
+                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
+                    }
+                    else  // neither can switch
+                    {
+                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
+                    }
+                }
+                else // enemy can switch his type
+                {
+                    if (myPac.CanSwitch) // i can switch type too
+                    {
+                        // hope enemy is smart (cross change)
+                        var nextType = myPac.TypeForWin_Cross(enemy);
+                        AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
+                    }
+                    else
+                    {
+                        AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
+                    }
+                }
+            }
+        }
+        else
+        {
+            // relatively close
+            if (myPac.Wins(enemy))
+            {
+                // winning state? => no need to worry
+            }
+            else
+            {
+                // losing state? => just one step back
+                AddActions_RunAway(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
+            }
+        }
+    }
+
+    void AddActions_ChangeType(Pac myPac, string nextType, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+    {
+        var act = new Action { Pac = myPac, NextType = nextType, IsSwitch = true };
+        actions.Add(act);
+        nexts.Add((myPac.X, myPac.Y));
+    }
+
+    void AddActions_Attack(Pac myPac, Pac enemy, List<(int, int)> pathToEnemy, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+    {
+        if (pathToEnemy == null) pathToEnemy = FindPath(myPac, enemy, false, null, false).path;
+        if (pathToEnemy?.Any() != true) return;
+
+        var nextToEnemy = pathToEnemy.Count() >= 2 ? pathToEnemy[pathToEnemy.Count() - 2] : pathToEnemy[0];
+        var invalids = new HashSet<(int, int)> { nextToEnemy, (myPac.X, myPac.Y) };
+
+        foreach(var n in GetAdjuscents(enemy))
+        {
+            if (invalids.Contains(n)) continue;
+            if (_map[n.Item2, n.Item1].IsWall) continue;
+
+            // found good target
+
+            var act = new Action { Pac = myPac, NextX = n.Item1, NextY = n.Item2, TargetX = n.Item1, TargetY = n.Item2, Path = pathToEnemy, IsMove = true, IsAttack = true };
+            actions.Add(act);
+            nexts.Add((pathToEnemy[1].Item1, pathToEnemy[1].Item2));
+            zeroScores.Add((pathToEnemy[1].Item1, pathToEnemy[1].Item2));
+            return;
+        }
+    }
+
+    void AddActions_RunAway(Pac myPac, Pac enemy, List<(int, int)> pathToEnemy, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+    {
+        if (pathToEnemy == null) pathToEnemy = FindPath(myPac, enemy, false, null, false).path;
+        if (pathToEnemy?.Any() != true || pathToEnemy.Count() < 2) return;
+
+        var invalids = new HashSet<(int, int)> { pathToEnemy[1], (myPac.X, myPac.Y) };
+
+        foreach (var n in GetAdjuscents(myPac))
+        {
+            if (invalids.Contains(n)) continue;
+            if (_map[n.Item2, n.Item1].IsWall) continue;
+
+            // found good route to run away
+
+            var act = new Action { Pac = myPac, NextX = n.Item1, NextY = n.Item2, TargetX = n.Item1, TargetY = n.Item2, IsMove = true, IsRun = true };
+            actions.Add(act);
+            nexts.Add((n.Item1, n.Item2));
+            zeroScores.Add((n.Item1, n.Item2));
+            return;
+        }
+    }
+
     void AddActions_SpeedUp(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
         var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
         var myPacs = _pacs.Where(p => p.Mine && !p.IsDead).Where(p => !usedMyPacs.Contains(p)).Where(p => p.AbilityCoolDown == 0);
         if (!myPacs.Any()) return;
 
-        var enemyPacs = _pacs.Where(p => !p.Mine);
+        var enemyPacs = _pacs.Where(p => !p.Mine && !p.IsDead);
         var superPellets = _pellets.Where(p => p.Value > 1);
         var doSpeedUp = false;
 
