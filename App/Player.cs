@@ -169,6 +169,8 @@ public class Pac : CellItem
     public int SpeedTurnsLeft;
     public int AbilityCoolDown;
 
+    public bool IsDead => TypeId == "DEAD";
+
     public Pac(int x, int y) : base(x, y) { }
     public override string ToString()
     {
@@ -346,7 +348,12 @@ public class Game
 
         // overwrite with new information for visible cells
         foreach (var pac in pacs)
-            ret[pac.Y, pac.X] = pac;
+        {
+            if (pac.IsDead)
+                ret[pac.Y, pac.X] = new Floor(pac.X, pac.Y);
+            else
+                ret[pac.Y, pac.X] = pac;
+        }
         foreach (var pellet in pellets)
             ret[pellet.Y, pellet.X] = pellet;
 
@@ -445,7 +452,7 @@ public class Game
     void AddActions_SpeedUp(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
         var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
-        var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).Where(p => p.AbilityCoolDown == 0);
+        var myPacs = _pacs.Where(p => p.Mine && !p.IsDead).Where(p => !usedMyPacs.Contains(p)).Where(p => p.AbilityCoolDown == 0);
         if (!myPacs.Any()) return;
 
         var enemyPacs = _pacs.Where(p => !p.Mine);
@@ -472,9 +479,9 @@ public class Game
         if (!superPellets.Any()) return;
 
         var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
-        var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).ToList();
+        var myPacs = _pacs.Where(p => p.Mine && !p.IsDead).Where(p => !usedMyPacs.Contains(p)).ToList();
         if (!myPacs.Any()) return;
-        var enemyPacs = _pacs.Where(p => !p.Mine);
+        var enemyPacs = _pacs.Where(p => !p.Mine && !p.IsDead);
 
         // (distance, pellet, pac)
         var info = new List<((List<(int x, int y)> path, double score) pathInfo, Pellet pellet, Pac pac)>();
@@ -528,7 +535,7 @@ public class Game
     void AddActions_BestScoreExp(List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
         var usedMyPacs = actions.Select(a => a.Pac).ToHashSet();
-        var myPacs = _pacs.Where(p => p.Mine).Where(p => !usedMyPacs.Contains(p)).ToList();
+        var myPacs = _pacs.Where(p => p.Mine && !p.IsDead).Where(p => !usedMyPacs.Contains(p)).ToList();
 
         foreach (var mypac in myPacs)
         {
@@ -554,7 +561,7 @@ public class Game
         que.Enqueue((0, pac.X, pac.Y));
 
         var dist = 0;
-        var score = -100.0;
+        var score = 0.0;
         (int X, int Y) tgt = (-1, -1);
         while (que.Count() != 0)
         {
@@ -581,8 +588,8 @@ public class Game
                     var newScore = cur.score + GetScore(nX, nY, zeroScores, true, dist);
 
                     // if its first move and going back to previous, apply penalty
-                    if (dist == 1 && nX == prevPos.Item1 && nY == prevPos.Item2)
-                        newScore -= 15;
+                    //if (dist == 1 && nX == prevPos.Item1 && nY == prevPos.Item2)
+                    //    newScore -= 15;
 
                     passed.Add((nX, nY));
                     prev[(nX, nY)] = (cur.x, cur.y);
