@@ -803,17 +803,13 @@ public class Game
                     if (nY < 0 || nY >= Height) continue;
                     if (_map[nY, nX].IsWall) continue;
                     if (passed.Contains((nX, nY))) continue;
-                    if (IsNextTo(_map[nY, nX], "PAC_ENEMY", false)) continue;  // avoid enemy
-                    if (_map[nY, nX].IsPac) continue;       // avoid collision
+                    if (IsNextTo(_map[nY, nX], "PAC_LOSING_OR_EVEN_ENEMY", false, pac)) continue;  // avoid losing (or even) enemy
+                    if (IsTarget(_map[nY, nX], "PAC_LOSING_OR_EVEN_ENEMY", false, pac)) continue;
+                    if (_map[nY, nX].IsPac && (_map[nY, nX] as Pac).Mine) continue;        // avoid collision with friend
                     // other pac is trying to move to this space
                     if (dist == 1 && nexts.Contains((nX, nY))) continue;
 
                     var newScore = cur.score + GetScore(_map, nX, nY, zeroScores, true, dist);
-
-                    // if its first move and going back to previous, apply penalty
-                    //if (dist == 1 && nX == prevPos.Item1 && nY == prevPos.Item2)
-                    //    newScore -= 15;
-
                     passed.Add((nX, nY));
                     prev[(nX, nY)] = (cur.x, cur.y);
 
@@ -866,7 +862,8 @@ public class Game
                 if (nexts.Contains(n)) continue;
                 if (!_map[n.Item2, n.Item1].IsPellet) continue;
                 // close to enemy
-                if (IsNextTo(_map[n.Item2, n.Item1], "PAC_ENEMY", true)) continue;
+                if (IsNextTo(_map[n.Item2, n.Item1], "PAC_ENEMY", true, pac)) continue;
+                if (IsTarget(_map[n.Item2, n.Item1], "PAC_ENEMY", true, pac)) continue;
 
                 var tgt = n.Item1 == 30 && n.Item2 == 3;
 
@@ -937,7 +934,7 @@ public class Game
                         if (!st.IsPac) continue;
                         var myPac = st as Pac;
                         if (!myPac.Mine) continue;
-                        if (!myPac.Wins(map[nY, nX] as Pac)) continue;  // lose case
+                        if (!myPac.Wins(map[nY, nX] as Pac)) continue;  // lose or even case
                     }
                     var newScore = cur.score + GetScore(map, nX, nY, zeroScores, applyUncertainityForScore, dist);
 
@@ -1022,7 +1019,7 @@ public class Game
                     continue;
                 if (!allowPrevPos && prevPos.Any(p => p.Item1 == cur.Item1 && p.Item2 == cur.Item2))
                     continue;
-                if (IsTarget(_map[cur.Item2, cur.Item1], tgtType, certainPellet))
+                if (IsTarget(_map[cur.Item2, cur.Item1], tgtType, certainPellet, item))
                     return GetNextMove((item.X, item.Y), cur, prev);
             }
 
@@ -1057,49 +1054,51 @@ public class Game
         return (x, y, tgt.distance, tgt.x, tgt.y);
     }
 
-    bool IsTarget(CellItem item, string tgtType, bool certainPellet)
+    bool IsTarget(CellItem tgtItem, string tgtType, bool certainPellet, CellItem srcItem)
     {
         if (tgtType == "WALL")
-            return item.IsWall;
+            return tgtItem.IsWall;
         if (tgtType == "PELLET")
-            return item.IsPellet && (!certainPellet || (item as Pellet).UncertaintyLevel < 10);
+            return tgtItem.IsPellet && (!certainPellet || (tgtItem as Pellet).UncertaintyLevel < 10);
         if (tgtType == "FLOOR")
-            return item.IsFloor;
+            return tgtItem.IsFloor;
         if (tgtType == "PAC")
-            return item.IsPac;
+            return tgtItem.IsPac;
         if (tgtType == "PAC_MINE")
-            return item.IsPac && (item as Pac).Mine;
+            return tgtItem.IsPac && (tgtItem as Pac).Mine;
         if (tgtType == "PAC_ENEMY")
-            return item.IsPac && !(item as Pac).Mine;
+            return tgtItem.IsPac && !(tgtItem as Pac).Mine;
+        if (tgtType == "PAC_LOSING_OR_EVEN_ENEMY")
+            return (tgtItem.IsPac && !(tgtItem as Pac).Mine && srcItem.IsPac && (srcItem as Pac).Mine) && ((tgtItem as Pac).Wins(srcItem as Pac) || (tgtItem as Pac).Evens(srcItem as Pac));
 
         if (tgtType == "PELLET_1")
-            return item.IsPellet && (item as Pellet).Value == 1 && (!certainPellet || (item as Pellet).UncertaintyLevel < 10);
+            return tgtItem.IsPellet && (tgtItem as Pellet).Value == 1 && (!certainPellet || (tgtItem as Pellet).UncertaintyLevel < 10);
         if (tgtType == "PELLET_LARGE")
-            return item.IsPellet && (item as Pellet).Value > 1 && (!certainPellet || (item as Pellet).UncertaintyLevel < 10);
+            return tgtItem.IsPellet && (tgtItem as Pellet).Value > 1 && (!certainPellet || (tgtItem as Pellet).UncertaintyLevel < 10);
 
         if (tgtType == "PELLET_CLUSTER")
-            return IsCluster(item, certainPellet);
+            return IsCluster(tgtItem, srcItem, certainPellet);
         if (tgtType == "PELLET_LARGE_CLUSTER")
-            return IsCluster(item, certainPellet, 5, 6);
+            return IsCluster(tgtItem, srcItem, certainPellet, 5, 6);
 
         if (tgtType == "CROSSING")
-            return IsCrossing(item);
+            return IsCrossing(tgtItem, srcItem);
 
         if (tgtType == "CURVE")
-            return IsCurve(item);
+            return IsCurve(tgtItem, srcItem);
 
         return false;
     }
 
     // more than thres pellets within maxDist from the cell
-    bool IsCluster(CellItem item, bool certainPellet, int maxDist=5, int thres=3)
+    bool IsCluster(CellItem tgtItem, CellItem srcItem, bool certainPellet, int maxDist=5, int thres=3)
     {
-        if (!IsTarget(item, "PELLET", certainPellet)) return false;
+        if (!IsTarget(tgtItem, "PELLET", certainPellet, srcItem)) return false;
         var cnt = 0;
         var que = new Queue<(int, int)>();
         var passed = new HashSet<(int, int)>();
-        que.Enqueue((item.X, item.Y));
-        passed.Add((item.X, item.Y));
+        que.Enqueue((tgtItem.X, tgtItem.Y));
+        passed.Add((tgtItem.X, tgtItem.Y));
         var dist = 0;
         while(que.Any())
         {
@@ -1116,7 +1115,7 @@ public class Game
                     var nX = (cur.Item1 + dir1[d] + Width) % Width; // side can go through
                     var nY = cur.Item2 + dir2[d];
                     if (nY < 0 || nY >= Height) continue;
-                    if (!IsTarget(_map[nY, nX], "PELLET", certainPellet)) continue;
+                    if (!IsTarget(_map[nY, nX], "PELLET", certainPellet, srcItem)) continue;
                     newQueue.Enqueue((nX, nY));
                     passed.Add((nX, nY));
                 }
@@ -1130,36 +1129,36 @@ public class Game
         return false;
     }
 
-    bool IsNextTo(CellItem item, string tgtType, bool certainPellet)
+    bool IsNextTo(CellItem tgtItem, string tgtType, bool certainPellet, CellItem srcItem)
     {
-        var adjs = GetAdjuscents(item);
+        var adjs = GetAdjuscents(tgtItem);
         foreach(var n in adjs)
         {
-            if (IsTarget(_map[n.Item2, n.Item1], tgtType, certainPellet))
+            if (IsTarget(_map[n.Item2, n.Item1], tgtType, certainPellet, srcItem))
                 return true;
         }
         return false;
     }
 
-    bool IsCrossing(CellItem item)
+    bool IsCrossing(CellItem tgtItem, CellItem srcItem)
     {
         var cnt = 0;
-        var adjs = GetAdjuscents(item);
+        var adjs = GetAdjuscents(tgtItem);
         foreach (var n in adjs)
         {
-            if (!IsTarget(_map[n.Item2, n.Item1], "WALL", false))
+            if (!IsTarget(_map[n.Item2, n.Item1], "WALL", false, srcItem))
                 cnt++;
         }
         return cnt >= 3;
     }
 
-    bool IsCurve(CellItem item)
+    bool IsCurve(CellItem tgtItem, CellItem srcItem)
     {
         var floors = new List<(int, int)>();
-        var adjs = GetAdjuscents(item);
+        var adjs = GetAdjuscents(tgtItem);
         foreach (var n in adjs)
         {
-            if (!IsTarget(_map[n.Item2, n.Item1], "WALL", false))
+            if (!IsTarget(_map[n.Item2, n.Item1], "WALL", false, srcItem))
                 floors.Add((n.Item1, n.Item2));
         }
 
