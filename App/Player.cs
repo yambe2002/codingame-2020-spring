@@ -984,7 +984,7 @@ public class Game
         if (!applyUncertainityForScore) return ret;
         if (pellet.UncertaintyLevel + additionalUnsercaionity <= 0) return ret;
 
-        return ret * (Math.Pow(0.9, pellet.UncertaintyLevel + additionalUnsercaionity));
+        return ret * (Math.Pow(0.7, pellet.UncertaintyLevel + additionalUnsercaionity));
     }
 
     List<(int, int)> GetAdjuscents(CellItem item)
