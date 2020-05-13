@@ -771,8 +771,8 @@ public class Game
 
     Action GetBestScoreAction(Pac pac, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
-        int max_path_size = 15;
-        int path_size = 5;
+        int max_path_size = 20;
+        int path_size = 10;
 
         var prevPos = GetPrevPos(pac, _prevPacs);
         var que = new Queue<(double score, int x, int y)>();
@@ -982,7 +982,9 @@ public class Game
         var pellet = map[y, x] as Pellet;
         var ret = pellet.Value;
         if (!applyUncertainityForScore) return ret;
-        return ret * (230 - pellet.UncertaintyLevel - additionalUnsercaionity) / 230.0;
+        if (pellet.UncertaintyLevel + additionalUnsercaionity <= 0) return ret;
+
+        return ret * (Math.Pow(0.9, pellet.UncertaintyLevel + additionalUnsercaionity));
     }
 
     List<(int, int)> GetAdjuscents(CellItem item)
