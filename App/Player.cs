@@ -349,7 +349,7 @@ public class Game
         if (_prevMap == null) _prevMap = InitMap(Grid, Height, Width);
 
         _map = UpdateMap(_prevMap, Height, Width, _pacs, _pellets, _prevPacs, _prevprevPacs);
-        //Util.Log(_map);
+        Util.Log(_map);
         _prevMap = _map;
     }
 
@@ -618,28 +618,124 @@ public class Game
                 if (!enemy.CanSwitch)   // enemy cannot switch his type
                 {
                     // attack only if I can win in high posibility
-                    if(myPac.AtSpeed && !enemy.AtSpeed)
+                    if (myPac.AtSpeed && !enemy.AtSpeed)
                         AddActions_Attack(myPac, enemy, pathToEnemy, actions, zeroScores, nexts);
                 }
             }
             else if(myPac.Evens(enemy))
             {
-                if(enemy.CanSwitch && !myPac.CanSwitch)  // enemy can switch but I cannot => run away, no time to speed up!
+                if (enemy.CanSwitch && !myPac.CanSwitch)  // enemy can switch but I cannot => dangerous, run away
                 {
-                    dontSpeedUp.Add(myPac);
+                    AddActions_RunAway(myPac, enemy, actions, zeroScores, nexts, dontSpeedUp);
+                }
+                else
+                {
+                    // no need to worry
                 }
             }
             else
             {
                 // losing
-                // change type only if enemy is at speed and I'm not => urgent
-                if (!myPac.AtSpeed && enemy.AtSpeed)
+
+                if (myPac.CanSwitch)
                 {
                     var nextType = Pac.TypeForWin(enemy);
                     AddActions_ChangeType(myPac, nextType, actions, zeroScores, nexts);
                 }
+                else
+                {
+                    // run away as far as possible
+                    AddActions_RunAway(myPac, enemy, actions, zeroScores, nexts, dontSpeedUp);
+                }
             }
         }
+    }
+
+    void AddActions_RunAway(Pac pac, Pac enemy, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts, HashSet<Pac> dontSpeedUp)
+    {
+        var act = GetAction_RunAway(pac, enemy, actions, zeroScores, nexts);
+        if (act == null) return;
+
+        actions.Add(act);
+        AddToZeroScores(act, zeroScores);
+        if (act.IsMove) nexts.Add((act.NextX, act.NextY));
+    }
+
+    Action GetAction_RunAway(Pac pac, Pac enemy, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
+    {
+        // try to run away farmost from the current position, avoiding any enemy
+        int max_path_size = 15;
+
+        var que = new Queue<(int x, int y)>();
+
+        var passed = new HashSet<(int x, int y)>();
+        var prev = new Dictionary<(int, int), (int, int)>();
+
+        passed.Add((pac.X, pac.Y));
+        que.Enqueue((pac.X, pac.Y));
+
+        var dist = 0;
+        (int X, int Y) tgt = (-1, -1);
+        while (que.Count() != 0)
+        {
+            dist++;
+            if (dist >= max_path_size) break;
+
+            var newQueue = new Queue<(int x, int y)>();
+            while (que.Count() != 0)
+            {
+                var cur = que.Dequeue();
+                tgt = (cur.x, cur.y);
+                for (int d = 0; d < 4; d++)
+                {
+                    var nX = (cur.x + dir1[d] + Width) % Width; // side can go through
+                    var nY = cur.y + dir2[d];
+                    if (nY < 0 || nY >= Height) continue;
+                    if (_map[nY, nX].IsWall) continue;
+                    if (passed.Contains((nX, nY))) continue;                    
+                    if (IsTarget(_map[nY, nX], "PAC_LOSING_OR_EVEN_ENEMY", false, pac)) continue;
+                    //if (_map[nY, nX].IsPac && (_map[nY, nX] as Pac).Mine) continue;        // ignore friend
+                    // other pac is trying to move to this space
+                    if (dist == 1 && nexts.Contains((nX, nY))) continue;
+
+                    passed.Add((nX, nY));
+                    prev[(nX, nY)] = (cur.x, cur.y);
+                    newQueue.Enqueue((nX, nY));
+                }
+            }
+            que = newQueue;
+        }
+
+        // get path
+        var path = new List<(int, int)>();
+        var coord = (tgt.X, tgt.Y);
+        while (prev.ContainsKey(coord))
+        {
+            path.Add(coord);
+            coord = prev[coord];
+        }
+        path.Add(coord);
+        path.Reverse();
+
+        // no way to run away....
+        if (path.Count() < 2)
+        {
+            // at least try to goto opposite from enemy
+            foreach (var ad in GetAdjuscents(pac))
+            {
+                if (ad.Item1 == enemy.X && ad.Item2 == enemy.Y) continue;
+                var ret2 = new Action { Pac = pac, IsMove = true, NextX = ad.Item1, NextY = ad.Item2, Path = new List<(int x, int y)>() };
+                ret2.IsRun = true;
+                return ret2;
+            }
+            // no hope
+            return null;
+        }
+
+        // let's go
+        var ret = Action.GetMove(pac, path, -1);
+        ret.IsRun = true;
+        return ret;
     }
 
     void AddActions_ChangeType(Pac myPac, string nextType, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
@@ -766,6 +862,7 @@ public class Game
             if (act == null) continue;
             actions.Add(act);
             AddToZeroScores(act, zeroScores);
+            nexts.Add((act.NextX, act.NextY));
         }
     }
 
@@ -803,6 +900,7 @@ public class Game
                     if (nY < 0 || nY >= Height) continue;
                     if (_map[nY, nX].IsWall) continue;
                     if (passed.Contains((nX, nY))) continue;
+                    if (IsCloseTo(_map[nY, nX], "PAC_LOSING_ENEMY", false, pac)) continue;  // avoid being close to danger
                     if (IsNextTo(_map[nY, nX], "PAC_LOSING_OR_EVEN_ENEMY", false, pac)) continue;  // avoid losing (or even) enemy
                     if (IsTarget(_map[nY, nX], "PAC_LOSING_OR_EVEN_ENEMY", false, pac)) continue;
                     if (_map[nY, nX].IsPac && (_map[nY, nX] as Pac).Mine) continue;        // avoid collision with friend
@@ -841,8 +939,7 @@ public class Game
         // score decreased
         // (path, score) = GetBestScoreAction_TakeSinglePellet(pac, zeroScores, nexts, path, score);
 
-        var act = Action.GetMove(pac, path, score);
-        nexts.Add((act.NextX, act.NextY));
+        var act = Action.GetMove(pac, path, score);        
         return act;
     }
 
@@ -981,7 +1078,7 @@ public class Game
         if (!applyUncertainityForScore) return ret;
         if (pellet.UncertaintyLevel + additionalUnsercaionity <= 0) return ret;
 
-        return ret * (Math.Pow(0.8, pellet.UncertaintyLevel + additionalUnsercaionity));
+        return ret * (Math.Pow(0.98, pellet.UncertaintyLevel + additionalUnsercaionity));
     }
 
     List<(int, int)> GetAdjuscents(CellItem item)
@@ -994,6 +1091,39 @@ public class Game
             if (nY < 0 || nY >= Height) continue;
             if (_map[nY, nX].IsWall) continue;
             ret.Add((nX, nY));
+        }
+        return ret;
+    }
+
+    List<(int, int)> GetCloses(CellItem item, int dist=3)
+    {
+        var ret = new List<(int, int)>();
+        // all cells within dist
+        var que = new Queue<(int, int)>();
+        var passed = new HashSet<(int, int)>();
+        que.Enqueue((item.X, item.Y));
+        passed.Add((item.X, item.Y));
+        ret.Add((item.X, item.Y));
+
+        var d = 0;
+        while(que.Any())
+        {
+            d++;
+            if (d > dist) break;
+            var newQue = new Queue<(int, int)>();
+
+            while (que.Any())
+            {
+                var cur = que.Dequeue();
+                foreach(var adj in GetAdjuscents(_map[cur.Item2, cur.Item1]))
+                {
+                    if (passed.Contains(adj)) continue;
+                    passed.Add(adj);
+                    ret.Add(adj);
+                    newQue.Enqueue((adj));
+                }
+            }
+            que = newQue;
         }
         return ret;
     }
@@ -1070,6 +1200,8 @@ public class Game
             return tgtItem.IsPac && !(tgtItem as Pac).Mine;
         if (tgtType == "PAC_LOSING_OR_EVEN_ENEMY")
             return (tgtItem.IsPac && !(tgtItem as Pac).Mine && srcItem.IsPac && (srcItem as Pac).Mine) && ((tgtItem as Pac).Wins(srcItem as Pac) || (tgtItem as Pac).Evens(srcItem as Pac));
+        if (tgtType == "PAC_LOSING_ENEMY")
+            return (tgtItem.IsPac && !(tgtItem as Pac).Mine && srcItem.IsPac && (srcItem as Pac).Mine) && ((tgtItem as Pac).Wins(srcItem as Pac));
 
         if (tgtType == "PELLET_1")
             return tgtItem.IsPellet && (tgtItem as Pellet).Value == 1 && (!certainPellet || (tgtItem as Pellet).UncertaintyLevel < 10);
@@ -1133,6 +1265,17 @@ public class Game
     {
         var adjs = GetAdjuscents(tgtItem);
         foreach(var n in adjs)
+        {
+            if (IsTarget(_map[n.Item2, n.Item1], tgtType, certainPellet, srcItem))
+                return true;
+        }
+        return false;
+    }
+
+    bool IsCloseTo(CellItem tgtItem, string tgtType, bool certainPellet, CellItem srcItem)
+    {
+        var adjs = GetCloses(tgtItem);
+        foreach (var n in adjs)
         {
             if (IsTarget(_map[n.Item2, n.Item1], tgtType, certainPellet, srcItem))
                 return true;
