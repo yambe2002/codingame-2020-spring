@@ -356,6 +356,8 @@ public class Game
     List<Pac> _pacs = new List<Pac>();
     List<Pac> _prevPacs = new List<Pac>();
     List<Pac> _prevprevPacs = new List<Pac>();
+
+    List<Pellet> _prevPelles = new List<Pellet>();
     List<Pellet> _pellets = new List<Pellet>();
 
     List<Action> _prevActions;
@@ -365,6 +367,7 @@ public class Game
         _prevprevPacs = _prevPacs;
         _prevPacs = _pacs.ToList();
         _pacs.Clear();
+        _prevPelles = _pellets.ToList();
         _pellets.Clear();
     }
    
@@ -385,7 +388,7 @@ public class Game
     {
         if (_prevMap == null) _prevMap = InitMap(Grid, Height, Width);
 
-        _map = UpdateMap(_prevMap, Height, Width, _pacs, _pellets, _prevPacs, _prevprevPacs);
+        _map = UpdateMap(_prevMap, Height, Width, _pacs, _pellets, _prevPacs, _prevprevPacs, _prevPelles);
         Util.Log(_map);
         _prevMap = _map;
     }
@@ -404,7 +407,7 @@ public class Game
         return ret;
     }
 
-    CellItem[,] UpdateMap(CellItem[,] prevMap, int height, int width, List<Pac> pacs, List<Pellet> pellets, List<Pac> prevPacs, List<Pac> prevPrevPacs)
+    CellItem[,] UpdateMap(CellItem[,] prevMap, int height, int width, List<Pac> pacs, List<Pellet> pellets, List<Pac> prevPacs, List<Pac> prevPrevPacs, List<Pellet> prevPellets)
     {
         var ret = new CellItem[height, width];
 
@@ -461,6 +464,33 @@ public class Game
 
         // failes to move? => invisible enemy pac exists
         GuessEnemies2(ret, height, width, pacs, prevPacs, _prevActions);
+
+        if (prevPellets != null)
+        {
+            // super pellet becomes gone! => becomes enemy or floor
+            foreach (var prevPellet in prevPellets)
+            {
+                if(prevPellet.Value > 1)
+                {
+                    var currentPellet = pellets.FirstOrDefault(p => p.X == prevPellet.X && p.Y == prevPellet.Y);
+
+                    // gone
+                    if (currentPellet == null)
+                    {
+                        Util.Log("super pellet is gone!");
+
+                        if (!ret[prevPellet.Y, prevPellet.X].IsPac)
+                        {
+                            // set floor or dummy (or good) pac
+
+                            ret[prevPellet.Y, prevPellet.X] = new Floor(prevPellet.X, prevPellet.Y);
+
+                        }
+                    }
+                }
+
+            }
+        }
 
         return ret;
     }
@@ -957,13 +987,13 @@ public class Game
         int path_size = 7;
 
         var prevPos = GetPrevPos(pac, _prevPacs);
-        var que = new Queue<(double score, int x, int y)>();
+        var que = new Queue<(double score, int x, int y, bool enemyPassed)>();
 
         var passed = new HashSet<(int x, int y)>();
         var prev = new Dictionary<(int, int), (int, int)>();
 
         passed.Add((pac.X, pac.Y));
-        que.Enqueue((0, pac.X, pac.Y));
+        que.Enqueue((0, pac.X, pac.Y, false));
 
         var dist = 0;
         var score = -1.0;
@@ -974,7 +1004,7 @@ public class Game
             if (dist >= path_size && score > 0) break;
             if (dist >= max_path_size) break;
 
-            var newQueue = new Queue<(double score, int x, int y)>();
+            var newQueue = new Queue<(double score, int x, int y, bool enemyPassed)>();
             while (que.Count() != 0)
             {
                 var cur = que.Dequeue();
@@ -992,7 +1022,9 @@ public class Game
                     // other pac is trying to move to this space
                     if (dist == 1 && nexts.Contains((nX, nY))) continue;
 
-                    var newScore = cur.score + GetScore(_map, nX, nY, zeroScores, true, dist);
+                    var enemyPassed = cur.enemyPassed || _map[nY, nX].IsEnemyPac;
+
+                    var newScore = cur.score + (enemyPassed ? 0 : GetScore(_map, nX, nY, zeroScores, true, dist));
                     passed.Add((nX, nY));
                     prev[(nX, nY)] = (cur.x, cur.y);
 
@@ -1001,7 +1033,7 @@ public class Game
                         score = newScore;
                         tgt = (nX, nY);
                     }
-                    newQueue.Enqueue((newScore, nX, nY));
+                    newQueue.Enqueue((newScore, nX, nY, enemyPassed));
                 }
             }
             que = newQueue;
@@ -1083,14 +1115,14 @@ public class Game
         CellItem st, CellItem tgt, bool ignoreEnemy,
         HashSet<(int, int)> zeroScores, bool applyUncertainityForScore, bool ignoreEnemyIfWin)
     {
-        var cmp = new ScoreTplComparer<(double score, int x, int y)>();
-        var que = new PriorityQueue<(double score, int x, int y)>(cmp);   // score should come first
+        var cmp = new ScoreTplComparer<(double score, int x, int y, bool enemyPassed)>();
+        var que = new PriorityQueue<(double score, int x, int y, bool enemyPassed)>(cmp);   // score should come first
 
         var passed = new HashSet<(int x, int y)>();
         var prev = new Dictionary<(int, int), (int, int)>();
 
         passed.Add((st.X, st.Y));
-        que.Push((0, st.X, st.Y));
+        que.Push((0, st.X, st.Y, false));
 
         var dist = 0;
         var score = -1.0;
@@ -1098,7 +1130,7 @@ public class Game
         while (!done && que.Count() != 0)
         {
             dist++;
-            var newQueue = new PriorityQueue<(double score, int x, int y)>(cmp);
+            var newQueue = new PriorityQueue<(double score, int x, int y, bool enemyPassed)>(cmp);
             while (que.Count() != 0)
             {
                 var cur = que.Pop();
@@ -1118,7 +1150,8 @@ public class Game
                         if (!myPac.Mine) continue;
                         if (!myPac.Wins(map[nY, nX] as Pac)) continue;  // lose or even case
                     }
-                    var newScore = cur.score + GetScore(map, nX, nY, zeroScores, applyUncertainityForScore, dist);
+                    var enemyPassed = cur.enemyPassed || map[nY, nX].IsEnemyPac; // consider as score=0 after passing enemy
+                    var newScore = cur.score + (enemyPassed ? 0 : GetScore(map, nX, nY, zeroScores, applyUncertainityForScore, dist));
 
                     passed.Add((nX, nY));
                     prev[(nX, nY)] = (cur.x, cur.y);
@@ -1131,7 +1164,7 @@ public class Game
                         break;
                     }
                     // not goal
-                    newQueue.Push((newScore, nX, nY));
+                    newQueue.Push((newScore, nX, nY, enemyPassed));
                 }
             }
             que = newQueue;
@@ -1163,7 +1196,7 @@ public class Game
         if (!applyUncertainityForScore) return ret;
         if (pellet.UncertaintyLevel + additionalUnsercaionity <= 0) return ret;
 
-        return ret * (Math.Pow(0.98, pellet.UncertaintyLevel + additionalUnsercaionity));
+        return ret * (Math.Pow(0.998, pellet.UncertaintyLevel + additionalUnsercaionity));
     }
 
     List<(int, int)> GetAdjuscents(CellItem item)
@@ -1401,8 +1434,8 @@ public class ScoreTplComparer<T> : IComparer<T>
 {
     public int Compare(T x, T y)
     {
-        var tx = (x as (double score, int x, int y)?).Value;
-        var ty = (y as (double score, int x, int y)?).Value;
+        var tx = (x as (double score, int x, int y, bool enemyPassed)?).Value;
+        var ty = (y as (double score, int x, int y, bool enemyPassed)?).Value;
         return ty.score.CompareTo(tx.score);
     }
 }
