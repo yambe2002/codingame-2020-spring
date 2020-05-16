@@ -186,6 +186,7 @@ public class Pac : CellItem
 
     public bool AtSpeed => SpeedTurnsLeft > 0;
     public bool CanSwitch => SpeedTurnsLeft == 0 && AbilityCoolDown == 0;
+    public bool CanSpeedUp => !AtSpeed && AbilityCoolDown == 0;
     public int UncertainityLevel;
 
     public int TotalTimeUntilSwitchable
@@ -470,7 +471,7 @@ public class Game
             // super pellet becomes gone! => becomes enemy or floor
             foreach (var prevPellet in prevPellets)
             {
-                if(prevPellet.Value > 1)
+                if (prevPellet.Value > 1)
                 {
                     var currentPellet = pellets.FirstOrDefault(p => p.X == prevPellet.X && p.Y == prevPellet.Y);
 
@@ -481,14 +482,19 @@ public class Game
 
                         if (!ret[prevPellet.Y, prevPellet.X].IsPac)
                         {
-                            // set floor or dummy (or good) pac
+                            // set enemy pac
+                            ret[prevPellet.Y, prevPellet.X] = new Pac(prevPellet.X, prevPellet.Y) { ID = -1, Mine = false, UncertainityLevel = 4 };
 
-                            ret[prevPellet.Y, prevPellet.X] = new Floor(prevPellet.X, prevPellet.Y);
-
+                            // highly possible that near pellets are already taken
+                            foreach (var ad in GetCloses(ret[prevPellet.Y, prevPellet.X]))
+                            {
+                                var adItem = ret[ad.Item2, ad.Item1];
+                                if (adItem.IsPellet)
+                                    (adItem as Pellet).UncertaintyLevel += 50;
+                            }
                         }
                     }
                 }
-
             }
         }
 
@@ -778,6 +784,16 @@ public class Game
 
     Action GetAction_RunAway(Pac pac, Pac enemy, List<Action> actions, HashSet<(int, int)> zeroScores, HashSet<(int, int)> nexts)
     {
+        // if possible, better speed up
+        if (pac.CanSpeedUp)
+        {
+            var distToEnemy = Math.Abs(pac.X - enemy.X) + Math.Abs(pac.Y - enemy.Y);
+            if ((!enemy.AtSpeed && distToEnemy >= 2) || (enemy.AtSpeed && distToEnemy >= 3))
+            {
+                return new Action { Pac = pac, IsSpeed = true };
+            }
+        }
+
         // try to run away farmost from the current position, avoiding any enemy
         int max_path_size = 15;
 
