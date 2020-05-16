@@ -197,6 +197,19 @@ public class Pac : CellItem
         }
     }
 
+    public Pac Clone()
+    {
+        return new Pac(X, Y)
+        {
+            ID = ID,
+            Mine = Mine,
+            TypeId = TypeId,
+            SpeedTurnsLeft = SpeedTurnsLeft,
+            AbilityCoolDown = AbilityCoolDown,
+            UncertainityLevel = UncertainityLevel,            
+        };
+    }
+
     public Pac(int x, int y) : base(x, y) { }
     public override string ToString()
     {
@@ -305,6 +318,28 @@ public class Action
             ExpScore = score
         };
     }
+
+    public Action Clone()
+    {
+        var ret = new Action
+        {
+            Pac = Pac?.Clone(),
+            IsSpeed = IsSpeed,
+            IsSwitch = IsSwitch,
+            NextType = NextType,
+            IsMove = IsMove,
+            NextX = NextX,
+            NextY = NextY,
+            TargetX = TargetX,
+            TargetY = TargetY,
+            Distance = Distance,
+            Path = Path?.ToList(),
+            ExpScore = ExpScore,
+            IsAttack = IsAttack,
+            IsRun = IsRun,
+        };
+        return ret;
+    }
 }
 
 public class Game
@@ -322,6 +357,8 @@ public class Game
     List<Pac> _prevPacs = new List<Pac>();
     List<Pac> _prevprevPacs = new List<Pac>();
     List<Pellet> _pellets = new List<Pellet>();
+
+    List<Action> _prevActions;
 
     public void TurnStart()
     {
@@ -422,6 +459,9 @@ public class Game
         // make a guess for invisible enemy pacs
         GuessEnemies(ret, height, width, pacs, prevPacs, prevPrevPacs);
 
+        // failes to move? => invisible enemy pac exists
+        GuessEnemies2(ret, height, width, pacs, prevPacs, _prevActions);
+
         return ret;
     }
 
@@ -484,6 +524,50 @@ public class Game
                 newEnemyPac.X = newX;
                 newEnemyPac.Y = newY;
                 ret[newEnemyPac.Y, newEnemyPac.X] = newEnemyPac;
+            }
+        }
+    }
+
+    void GuessEnemies2(CellItem[,] ret, int height, int width, List<Pac> pacs, List<Pac> prevPacs, List<Action> prevActions)
+    {
+        if (prevActions == null) return;
+        foreach (var myPac in pacs.Where(p => p.Mine && !p.IsDead))
+        {
+            var prevAct = prevActions.FirstOrDefault(p => p.Pac.Mine && p.Pac.ID == myPac.ID);
+            if (prevAct == null) continue;
+            if (!prevAct.IsMove) continue;
+            if (prevAct.Path == null || prevAct.Path.Count() < 2) continue;
+            var lastPos = prevAct.Path[0];
+            var lastMovingPos = prevAct.Path[1];
+
+            // tried to move but still the same position?
+            if (myPac.X == lastPos.x && myPac.Y == lastPos.y)
+            {
+                if (ret[lastMovingPos.y, lastMovingPos.x].IsPac) continue;
+                if (ret[lastMovingPos.y, lastMovingPos.x].IsWall) continue;
+
+                // there are enemy pac next? => probably him
+                var found = false;
+                foreach (var adj in GetAdjuscents(ret[lastMovingPos.y, lastMovingPos.x]))
+                {
+                    if (ret[adj.Item2, adj.Item1].IsEnemyPac)
+                    {
+                        Util.Log("enemy is moved to the position blocked");
+                        ret[lastMovingPos.y, lastMovingPos.x] = ret[adj.Item2, adj.Item1];
+                        ret[lastMovingPos.y, lastMovingPos.x].X = adj.Item1;
+                        ret[lastMovingPos.y, lastMovingPos.x].Y = adj.Item2;
+                        ret[adj.Item2, adj.Item1] = new Floor(adj.Item1, adj.Item2);
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    // place dummy enemy
+                    ret[lastMovingPos.y, lastMovingPos.x] = new Pac(lastMovingPos.x, lastMovingPos.y) { ID = -1, UncertainityLevel = 4, Mine = false, TypeId = myPac.TypeId };
+                    Util.Log("dummy enemy is placed");
+                }
             }
         }
     }
@@ -567,6 +651,7 @@ public class Game
         AddActions_BestScoreExp(actions, zeroScores, nexts);
 
         Util.Log(actions);
+        _prevActions = actions.Select(a => a.Clone()).ToList();
         return GetAns(actions);
     }
 
@@ -994,7 +1079,7 @@ public class Game
             zeroScores.Add((p.x, p.y));
     }
 
-    static (List<(int x, int y)> path, double score) FindPath(CellItem[,] map, int width, int height,
+    (List<(int x, int y)> path, double score) FindPath(CellItem[,] map, int width, int height,
         CellItem st, CellItem tgt, bool ignoreEnemy,
         HashSet<(int, int)> zeroScores, bool applyUncertainityForScore, bool ignoreEnemyIfWin)
     {
